@@ -510,7 +510,7 @@ mark { background: var(--color-surface-3); color: var(--color-ink); border-radiu
 
 /* preferências de leitura (única superfície elevada, §5.7) */
 .reading { position: relative; flex: none; }
-.reading-btn { min-width: 32px; justify-content: center; font-size: 13px; color: var(--color-ink-2); }
+.reading-btn { min-width: 32px; justify-content: center; font-size: 13px; text-transform: none; color: var(--color-ink-2); }
 .panel {
   position: absolute; top: calc(100% + 12px); right: -8px; width: 300px; z-index: 30; padding: 16px;
   background: var(--color-surface); border: 0.5px solid var(--color-hair); border-radius: var(--radius-panel); box-shadow: var(--shadow-panel);
@@ -2766,8 +2766,11 @@ mark { background: var(--color-surface-3); color: var(--color-ink); border-radiu
     if (z) {
       var s = z.closest('.diagram').querySelector('.mermaid-out svg');
       if (!s || !viewer.showModal) return;
+      // o CSS do Mermaid está preso ao id do SVG: o clone recebe id próprio e o <style> é reescrito
       vSvg = s.cloneNode(true);
-      vSvg.removeAttribute('id');
+      var oldId = s.id;
+      vSvg.id = 'mmd-viewer';
+      $$('style', vSvg).forEach(function (st) { st.textContent = st.textContent.split('#' + oldId).join('#mmd-viewer'); });
       vBody.innerHTML = '';
       vBody.appendChild(vSvg);
       viewer.showModal();
