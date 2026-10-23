@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>05 · Instalar o SFRA e o sample site · Guia SFCC</title>
+<meta name="description" content="Passo a passo para instalar o SFRA numa sandbox: acesso aos repositórios privados, clone por tag, npm install, build de JS e SCSS, dw.json, upload de cartridges, import dos dados de demonstração (RefArch), cartridge path e verificação.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="05" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Instalar o SFRA e o sample site</h1>
+  <p class="lead">Do zero até ver a loja de demonstração (<em>RefArch</em>) funcionando na sua sandbox: conseguir acesso aos repositórios privados, baixar o código na versão certa, instalar dependências, compilar JS e SCSS, configurar credenciais, enviar os cartridges, importar os dados de demonstração, montar o cartridge path e verificar. No fim, como baixar o código que já está numa instância.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>storefront-reference-architecture</dt><dd>Repositório <strong>privado</strong> com <code>app_storefront_base</code> e <code>modules</code>. Sem acesso autorizado, o GitHub responde 404, como se o repositório não existisse.</dd>
+  <dt>storefrontdata</dt><dd>Repositório com os <strong>dados de demonstração</strong> do SFRA: sites RefArch e RefArchGlobal, catálogos, price books, inventário, conteúdo, preferências e metadados.</dd>
+  <dt>sgmf-scripts</dt><dd>CLI do SFRA para compilar, lintar e fazer upload. É obrigatória para o build.</dd>
+  <dt>Plugins</dt><dd>Repositórios opcionais (<code>plugin_wishlists</code>, <code>plugin_giftregistry</code>, <code>plugin-applepay</code>…), versionados com as mesmas tags do base.</dd>
+  <dt>dw.json</dt><dd>Arquivo local com host, credenciais e code version de destino, usado pelas ferramentas de upload. Não vai para o Git.</dd>
+  <dt>Access key</dt><dd>Em organizações com login unificado do Account Manager, a "senha" do WebDAV é uma <strong>access key</strong> gerada no BM (<em>seu usuário &gt; Manage Access Keys</em>), com escopo (WebDAV File Access, OCAPI, etc.) e validade de um ano.</dd>
+  <dt>Code version</dt><dd>A pasta no servidor que recebe os cartridges (ex.: <code>version1</code>). Precisa estar <strong>ativa</strong> para o storefront usá-la.</dd>
+  <dt>Site import</dt><dd><em>Administration &gt; Site Development &gt; Site Import &amp; Export</em>: importa um .zip com a estrutura de site export (catálogos, sites, meta, libraries…).</dd>
+</dl>
+
+<script type="text/plain" class="mmd" data-caption="o caminho completo da instalação">
+flowchart LR
+  A["GitHub + 2FA<br/>+ SSO Commerce Cloud"] --> B["clone dos repositórios<br/>como irmãos, mesma tag"]
+  B --> C["npm install<br/>(Node 18)"]
+  C --> D["npm run compile:js<br/>compile:scss / compile:fonts"]
+  D --> E["dw.json<br/>(host, user, access key, code version)"]
+  E --> F["upload: npm run uploadCartridge<br/>ou b2c code deploy"]
+  F --> G["BM: ativar code version"]
+  G --> H["zip storefrontdata →<br/>Site Import"]
+  H --> I["cartridge path<br/>de RefArch e RefArchGlobal"]
+  I --> J["reindex + abrir a loja"]
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="acesso" data-k="cap. 2">
+<h2>Pré-requisitos e acesso</h2>
+<div class="prose">
+<h3 id="github">Acesso aos repositórios privados</h3>
+<ol class="steps">
+  <li>Tenha uma conta no GitHub (pode ser pessoal, sem relação com o Salesforce).</li>
+  <li>Ative a <strong>autenticação em dois fatores</strong> (2FA) na conta do GitHub; a Salesforce exige.</li>
+  <li>Associe a conta à organização pela página de <strong>SSO da Salesforce Commerce Cloud</strong> no GitHub, autenticando com o seu usuário do <strong>Account Manager</strong>.</li>
+  <li>Contas inativas por 90 dias são removidas da organização; para voltar, refaça o SSO.</li>
+</ol>
+
+<h3 id="ambiente-local">Ambiente local</h3>
+<ul>
+  <li><strong>Node.js</strong>: a documentação do SFRA cita a versão 18 como testada. O Node serve só para dependências e build, nunca para executar o storefront.</li>
+  <li><strong>Git</strong>, e um editor (VS Code com a extensão B2C, ou Prophet; veja o <a class="text-link" href="15-ide-deploy.html">tema 15</a>).</li>
+  <li>Uma <strong>sandbox</strong> (On-Demand Sandbox) com usuário de BM. O SFRA não deve ser importado em instâncias do PIG.</li>
+  <li>Uma <strong>access key</strong> com escopo <em>WebDAV File Access</em> (se a organização usa login unificado), ou um API client com permissão de WebDAV.</li>
+</ul>
+<aside class="callout" data-kind="warn">
+<p>A documentação é explícita: <em>"Do not import SFRA data into an instance in your Primary Instance Group (PIG)."</em> O sample site serve para sandboxes de estudo e referência.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="codigo" data-k="cap. 3">
+<h2>Obtendo o código na versão certa</h2>
+<div class="prose">
+<p>Clone os repositórios <strong>lado a lado</strong> (como irmãos): as ferramentas de build resolvem caminhos relativos como <code>../storefront-reference-architecture</code> e não funcionam com repositórios aninhados.</p>
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal">
+mkdir sfra-workspace && cd sfra-workspace
+
+# obrigatórios
+git clone git@github.com:SalesforceCommerceCloud/storefront-reference-architecture.git
+git clone git@github.com:SalesforceCommerceCloud/storefrontdata.git
+# opcionais (plugins)
+git clone git@github.com:SalesforceCommerceCloud/plugin_wishlists.git
+git clone git@github.com:SalesforceCommerceCloud/lib_productlist.git   # dependência de wishlists e giftregistry
+
+# fixe TODOS na mesma tag de release (versões marcadas como "release" no GitHub foram testadas juntas)
+for repo in storefront-reference-architecture storefrontdata plugin_wishlists lib_productlist; do
+  (cd "$repo" && git fetch --tags && git checkout -b sfra-v7.0.0 v7.0.0)
+done
+</script>
+<aside class="callout" data-kind="verify">
+<p><code>v7.0.0</code> é só um exemplo de tag. Use <code>git tag</code> em cada repositório e escolha a última versão marcada como <strong>release</strong> (não <em>pre-release</em>) na aba Releases do GitHub. O ponto da documentação é usar a <strong>mesma tag</strong> em todos os repositórios.</p>
+</aside>
+<script type="text/plain" class="src" data-lang="text" data-file="estrutura esperada">
+sfra-workspace/
+├── storefront-reference-architecture/
+│   └── cartridges/
+│       ├── app_storefront_base/
+│       └── modules/
+├── storefrontdata/
+├── plugin_wishlists/
+└── lib_productlist/
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="build" data-k="cap. 4">
+<h2>Dependências e build</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal">
+cd storefront-reference-architecture
+
+node -v                      # confira a versão (a doc do SFRA cita Node 18 como testado)
+npm install                  # rode de novo sempre que trocar de versão do SFRA
+
+# compila JS (webpack), SCSS (sass + postcss) e copia as fontes (fontes: normalmente uma vez)
+npm run compile:js && npm run compile:scss && npm run compile:fonts
+
+# opcional: ver todos os comandos do sgmf-scripts
+npx sgmf-scripts --help
+</script>
+<p>O que cada passo faz:</p>
+<table>
+<thead><tr><th>Comando</th><th>Entrada</th><th>Saída</th></tr></thead>
+<tbody>
+<tr><td><code>compile:js</code></td><td><code>cartridge/client/default/js/*.js</code> (entry points)</td><td><code>cartridge/static/default/js/*.js</code></td></tr>
+<tr><td><code>compile:scss</code></td><td><code>cartridge/client/default/scss/**/*.scss</code> (exceto <code>_parciais</code>)</td><td><code>cartridge/static/default/css/**/*.css</code></td></tr>
+<tr><td><code>compile:fonts</code></td><td>fontes de <code>node_modules</code> (ex.: ícones)</td><td><code>static/default/fonts</code></td></tr>
+</tbody>
+</table>
+<p>Cada plugin com JS ou SCSS próprio também é compilado, rodando o build dentro do repositório dele, que tem o seu próprio <code>package.json</code> com <code>paths.base</code>.</p>
+<aside class="callout" data-kind="tip">
+<p>Se o build falhar com <em>Cannot find module</em> apontando para <code>base/…</code>, quase sempre é o layout de pastas: o plugin espera o SFRA em <code>../storefront-reference-architecture</code>.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="upload" data-k="cap. 5">
+<h2>Credenciais e upload dos cartridges</h2>
+<div class="prose">
+<h3 id="dwjson">dw.json</h3>
+<p>Formato mínimo para as ferramentas do SFRA (<code>sgmf-scripts</code>/<code>dwupload</code>), na raiz do repositório, irmão de <code>cartridges/</code>:</p>
+<script type="text/plain" class="src" data-lang="json" data-file="storefront-reference-architecture/dw.json">
+{
+    "hostname": "zzpq-001.dx.commercecloud.salesforce.com",
+    "username": "seu.usuario@empresa.com",
+    "password": "SUA-ACCESS-KEY-DE-WEBDAV",
+    "code-version": "version1"
+}
+</script>
+<p>O b2c CLI oficial (<code>@salesforce/b2c-cli</code>) lê o mesmo arquivo e aceita campos extras para as APIs administrativas (<code>client-id</code>, <code>client-secret</code>, <code>short-code</code>, <code>tenant-id</code>) e várias instâncias nomeadas:</p>
+<script type="text/plain" class="src" data-lang="json" data-file="dw.json (b2c CLI, várias instâncias)">
+{
+    "configs": [
+        {
+            "name": "sandbox",
+            "active": true,
+            "hostname": "zzpq-001.dx.commercecloud.salesforce.com",
+            "short-code": "kv7kzm78",
+            "tenant-id": "zzpq_001",
+            "client-id": "seu-client-id-do-account-manager",
+            "client-secret": "seu-client-secret",
+            "username": "seu.usuario@empresa.com",
+            "password": "SUA-ACCESS-KEY-DE-WEBDAV",
+            "code-version": "version1"
+        }
+    ]
+}
+</script>
+<aside class="callout" data-kind="warn">
+<p>O <code>dw.json</code> guarda segredos em texto puro. Ponha-o (e o <code>.env</code>) no <code>.gitignore</code>; no CI, use variáveis de ambiente (<code>SFCC_HOSTNAME</code>, <code>SFCC_USERNAME</code>, <code>SFCC_PASSWORD</code>, <code>SFCC_CLIENT_ID</code>…) guardadas no cofre de segredos da plataforma.</p>
+</aside>
+
+<h3 id="enviar">Enviando o código</h3>
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal">
+# com as ferramentas do SFRA (wrappers do dwupload), dentro de storefront-reference-architecture
+npm run uploadCartridge                     # envia todos os cartridges do repositório (app_storefront_base e modules)
+npm run upload cartridges/app_storefront_base/cartridge/templates/default/home/homePage.isml   # um arquivo
+npm run watch                               # observa e envia a cada alteração
+
+# ou com o b2c CLI, a partir da pasta que contém os cartridges
+b2c code deploy                             # descobre os cartridges e envia por WebDAV
+b2c code deploy -c app_storefront_base -c modules --reload   # só estes e reativa a versão
+b2c code list                               # code versions da instância
+b2c code activate version1                  # ativa
+</script>
+<p>Os plugins são enviados do mesmo jeito, de dentro do repositório de cada um. Confirme no BM: <em>Administration &gt; Site Development &gt; Code Deployment</em> → clique na code version → a lista de cartridges precisa conter <code>app_storefront_base</code>, <code>modules</code> e os plugins. Marque a versão como <strong>ativa</strong> se ainda não estiver.</p>
+<aside class="callout" data-kind="exam">
+<p>O cartridge <code>modules</code> precisa ser <strong>enviado</strong> (para o <code>require('server')</code> funcionar), mas a documentação diz que ele <strong>não precisa estar no cartridge path</strong>.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="dados" data-k="cap. 6">
+<h2>Importando o sample site (RefArch)</h2>
+<div class="prose">
+<p>Os dados de demonstração vêm do repositório <code>storefrontdata</code>, no formato de um <strong>site export</strong>: catálogos, price books, inventory lists, bibliotecas de conteúdo, meta (system object extensions e custom types) e a pasta <code>sites/</code> com os sites <strong>RefArch</strong> e <strong>RefArchGlobal</strong> (preferências, slots, promoções, URL rules, shipping, payment, taxação).</p>
+
+<ol class="steps">
+  <li><strong>Gere o .zip pela linha de comando.</strong> A documentação avisa que zips feitos com o utilitário de arquivo do macOS causam erro no import.</li>
+  <li>No BM: <em>Administration &gt; Site Development &gt; Site Import &amp; Export</em>.</li>
+  <li>Em <em>Import</em>, escolha <strong>Local</strong>, faça upload do .zip, selecione-o e clique <strong>Import</strong>.</li>
+  <li>Acompanhe o status na mesma tela (ou no log do job de import) até <em>Success</em>.</li>
+</ol>
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal">
+cd storefrontdata
+ls                               # identifique a pasta do site export (ex.: demo_data_sfra/)
+zip -r ../sfra-demo-data.zip demo_data_sfra    # zip pela linha de comando, não pelo Finder
+
+# alternativa sem BM, com o b2c CLI: importa um diretório ou zip e espera o job terminar
+b2c job import ../sfra-demo-data.zip --show-log
+</script>
+<aside class="callout" data-kind="verify">
+<p>O nome da pasta dentro do <code>storefrontdata</code> varia conforme a versão do repositório (por isso o <code>ls</code> antes). Use a pasta indicada no README da tag que você fez checkout.</p>
+</aside>
+<h3 id="ordem-import">Ordem quando há sites próprios</h3>
+<p>Numa sandbox que também terá o seu site customizado, importe <strong>primeiro o SFRA</strong> e depois o seu site: se houver conflito de atributos custom, os do seu site sobrescrevem os do SFRA, e os seus dados são preservados. Importar o SFRA por cima de sites customizados pode sobrescrever atributos e perder dados.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="configurar" data-k="cap. 7">
+<h2>Configuração pós-import</h2>
+<div class="prose">
+<h3 id="cartridge-path">1. Cartridge path</h3>
+<p><em>Administration &gt; Sites &gt; Manage Sites &gt; RefArch &gt; Settings</em> → campo <strong>Cartridges</strong>. Repita para RefArchGlobal.</p>
+<script type="text/plain" class="src" data-lang="text" data-file="Cartridges (RefArch)">
+# só o base
+app_storefront_base
+
+# com plugins (plugins à esquerda do base, porque estendem o base)
+plugin_wishlists:lib_productlist:app_storefront_base
+
+# com o seu cartridge customizado (sempre o mais à esquerda)
+app_custom_acme:plugin_wishlists:lib_productlist:app_storefront_base
+</script>
+<p>O cartridge path do Business Manager é outro (<em>Manage Sites &gt; Business Manager Site &gt; Settings</em>) e só importa para cartridges de BM (<code>bm_*</code>, <a class="text-link" href="07-cartridges.html">tema 07</a>).</p>
+
+<h3 id="url">2. URLs simples durante o desenvolvimento</h3>
+<p>Em <em>Merchant Tools &gt; Site Preferences &gt; Storefront URLs</em>, desmarque <strong>Enable Storefront URLs</strong> no começo do desenvolvimento. Assim você chama qualquer rota direto:</p>
+<script type="text/plain" class="src" data-lang="text" data-file="URLs de teste">
+https://zzpq-001.dx.commercecloud.salesforce.com/on/demandware.store/Sites-RefArch-Site/en_US/Home-Show
+https://zzpq-001.dx.commercecloud.salesforce.com/on/demandware.store/Sites-RefArch-Site/en_US/Search-Show?cgid=womens
+https://zzpq-001.dx.commercecloud.salesforce.com/on/demandware.store/Sites-RefArch-Site/default/Hello-World
+</script>
+
+<h3 id="prefs">3. Preferências do SFRA</h3>
+<p>Em <em>Merchant Tools &gt; Site Preferences &gt; Custom Preferences &gt; Storefront Configuration</em> estão os atributos custom criados pelo import: tipo de instância usado pelo SFRA, tag de verificação do Google, e-mails de notificação e o ID do price book de lista padrão, entre outros.</p>
+
+<h3 id="index">4. Índices de busca e cache</h3>
+<ul>
+  <li><em>Merchant Tools &gt; Search &gt; Search Indexes</em>: reconstrua os índices (produto, conteúdo, sugestões) do site importado.</li>
+  <li>Em sandbox, deixe o page cache <strong>desligado</strong> (<em>Administration &gt; Sites &gt; Manage Sites &gt; RefArch &gt; Cache</em>) para ver alterações na hora.</li>
+</ul>
+
+<h3 id="protecao">5. Proteção por senha (opcional)</h3>
+<p>Sandboxes ficam expostas na internet. A <em>Storefront Password Protection</em> (preferências de site) pede usuário e senha para o storefront; em organizações com login unificado, a senha pode ser uma access key com escopo <em>Protected Storefront Access</em>.</p>
+
+<h3 id="verificar">6. Verificação (smoke test)</h3>
+<ol class="steps">
+  <li>Home carrega com header, menu e slots.</li>
+  <li>Uma categoria mostra produtos (índice ok) e os filtros funcionam.</li>
+  <li>Uma PDP mostra preço e disponibilidade; selecionar variação atualiza a imagem.</li>
+  <li>Adicionar ao carrinho, aplicar um cupom de demo, ir ao checkout.</li>
+  <li>Concluir um pedido de teste com o cartão de demonstração do <code>basic_credit</code> (aceito sem gateway real).</li>
+  <li>Ver o pedido em <em>Merchant Tools &gt; Ordering &gt; Orders</em>.</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="download" data-k="cap. 8">
+<h2>Baixando o código de uma instância</h2>
+<div class="prose">
+<p>"Download its code" também cobre o caminho inverso: trazer para a máquina o que está numa instância, para auditar, comparar ou recuperar uma versão.</p>
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal">
+# b2c CLI: baixa os cartridges da code version ativa (ou de outra, com --code-version)
+b2c code download -o ./downloaded
+b2c code download --code-version release_2026_10 -c app_custom_acme -o ./auditoria
+
+# --mirror extrai cada cartridge para o local correspondente no projeto
+b2c code download --mirror
+</script>
+<p>Sem CLI, qualquer cliente WebDAV (Cyberduck, WinSCP, a extensão do VS Code) acessa <code>https://&lt;host&gt;/on/demandware.servlet/webdav/Sites/Cartridges/&lt;code-version&gt;/</code> com o usuário e a access key. Em <em>Code Deployment</em> você também pode baixar uma code version como .zip.</p>
+<aside class="callout" data-kind="best">
+<p>A fonte da verdade do código é o <strong>Git</strong>, não a instância. Baixar da instância serve para diagnóstico ("o que está rodando de fato em Staging?"), nunca como fluxo normal de trabalho.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Importar o SFRA em Staging ou Production.</strong> A documentação proíbe importar os dados do SFRA no PIG.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Misturar tags</strong> (base v7 com plugin de v6). Só versões com a mesma tag foram testadas juntas.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Versionar o <code>dw.json</code></strong> com senha ou access key.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Esquecer o build antes do upload.</strong> Sem <code>compile:js</code> e <code>compile:scss</code>, o <code>static/</code> fica sem os bundles e a loja carrega sem estilo ou sem comportamento.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>"Quais repositórios são obrigatórios?" → <code>storefront-reference-architecture</code>, <code>sgmf-scripts</code> e <code>storefrontdata</code>; o resto é opcional.</li>
+  <li>"Como os repositórios devem ficar no disco?" → <strong>lado a lado</strong>, não aninhados.</li>
+  <li>"Para que serve o Node no SFRA?" → <strong>só</strong> dependências e build; o servidor roda o motor de script do B2C.</li>
+  <li>"Onde se importa o sample site?" → <em>Site Import &amp; Export</em>, numa sandbox.</li>
+  <li>"O cartridge <code>modules</code> vai no cartridge path?" → <strong>não precisa</strong>, mas precisa ser enviado.</li>
+  <li>"Mudança não aparece depois do upload" → code version errada, ou não ativa; confira em Code Deployment.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>404 ao clonar o repositório</td><td>Conta do GitHub sem SSO da Commerce Cloud, ou sem 2FA; removida por inatividade</td><td>Ative o 2FA e refaça o SSO pela página da organização.</td></tr>
+<tr><td><code>npm install</code> falha</td><td>Versão do Node incompatível</td><td>Use a versão testada (a doc cita a 18); use o <code>nvm</code> para alternar.</td></tr>
+<tr><td>Upload 401</td><td>Usuário ou access key errados; escopo da key não inclui WebDAV; key expirada</td><td>Gere uma access key com escopo WebDAV File Access; confira o <code>hostname</code>.</td></tr>
+<tr><td>Import do site falha logo no início</td><td>Zip feito pelo utilitário do macOS; estrutura de pastas errada</td><td>Zipe pela linha de comando, com a pasta do export como raiz.</td></tr>
+<tr><td>Home em branco com erro "server module not found"</td><td>Cartridge <code>modules</code> não enviado</td><td>Envie o <code>modules</code>.</td></tr>
+<tr><td>Loja sem CSS ou sem JS</td><td>Build não rodou; <code>static/</code> vazio no servidor</td><td>Compile e reenvie.</td></tr>
+<tr><td>Categoria sem produtos</td><td>Índices não reconstruídos</td><td>Reconstrua em <em>Search Indexes</em>.</td></tr>
+<tr><td>Nada do que você envia aparece</td><td>Code version ativa diferente da do <code>dw.json</code></td><td>A documentação sugere ativar outra versão e reativar a atual, ou criar uma versão nova e ativá-la.</td></tr>
+<tr><td>SFRA não funciona numa sandbox nova</td><td>Compatibility mode errado; cartridge path diferente dos cartridges enviados</td><td>Confira o compatibility mode da code version e o path (checklist do "Troubleshoot SFRA").</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Conseguir acesso aos repositórios privados (2FA + SSO pelo Account Manager).</li>
+  <li>Clonar como irmãos e fixar a mesma tag de release em todos.</li>
+  <li>Rodar <code>npm install</code> e os comandos de compile, e saber o que cada um gera.</li>
+  <li>Escrever um <code>dw.json</code> e saber por que ele fica fora do Git.</li>
+  <li>Enviar código (<code>uploadCartridge</code> ou <code>b2c code deploy</code>) e ativar a code version.</li>
+  <li>Importar os dados de demonstração por Site Import e saber as restrições (nada de PIG; zip pela linha de comando).</li>
+  <li>Configurar o cartridge path dos sites RefArch e RefArchGlobal.</li>
+  <li>Reconstruir índices e verificar a loja ponta a ponta.</li>
+  <li>Baixar o código de uma instância para diagnóstico.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Ao tentar clonar <code>storefront-reference-architecture</code>, o GitHub responde 404. O que é mais provável?</p>
+  <ol class="opts-l"><li>O repositório foi apagado</li><li>A conta do GitHub não está autenticada na organização Commerce Cloud (SSO, 2FA)</li><li>Falta o <code>dw.json</code></li><li>A sandbox está parada</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Repositórios privados respondem 404 a contas sem acesso, como se não existissem.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual comando gera os arquivos de <code>static/default/js</code>?</p>
+  <ol class="opts-l"><li><code>npm run uploadCartridge</code></li><li><code>npm run compile:js</code></li><li><code>npm install</code></li><li><code>npm run lint</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O compile empacota os entry points de <code>client/default/js</code>.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Onde os dados do SFRA podem ser importados?</p>
+  <ol class="opts-l"><li>Em Staging, para replicar a Production</li><li>Numa sandbox, por Site Import &amp; Export</li><li>Em Production</li><li>Em qualquer instância</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> A documentação proíbe importar dados do SFRA em instâncias do PIG.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Você quer adicionar o plugin de wishlists à loja RefArch. Qual cartridge path é correto?</p>
+  <ol class="opts-l"><li><code>app_storefront_base:plugin_wishlists:lib_productlist</code></li><li><code>plugin_wishlists:lib_productlist:app_storefront_base</code></li><li><code>modules:plugin_wishlists</code></li><li><code>lib_productlist:app_storefront_base:plugin_wishlists</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O plugin estende o base, então fica à esquerda dele; <code>lib_productlist</code> é a dependência compartilhada do plugin.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Seu código foi enviado, mas o storefront continua mostrando a versão antiga. O que conferir primeiro?</p>
+  <ol class="opts-l"><li>A política de impostos</li><li>Se a code version do <code>dw.json</code> é a ativa em Code Deployment</li><li>O price book</li><li>A replicação</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Upload numa versão inativa não afeta o storefront. Também vale conferir o cache e o cartridge path.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Por que o <code>dw.json</code> não deve ir para o repositório?</p>
+  <ol class="opts-l"><li>Porque é gerado no build</li><li>Porque guarda host e credenciais em texto puro</li><li>Porque o Git não aceita JSON</li><li>Porque muda a cada compile</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Use <code>.gitignore</code> e, no CI, variáveis de ambiente no cofre de segredos.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-build-sfra.html">Get Started with SFRA</a>: repositórios, npm, compile, dw.json, upload.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-configuring-sfra.html">Configure SFRA</a>: cartridge path, import de dados, URLs, preferências.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-github-repo-access.html">GitHub Repositories and Access</a>: 2FA, SSO, inatividade.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-sfra-versions.html">SFRA Versions and Releases</a></li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-troubleshooting-sfra.html">Troubleshoot SFRA</a></li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_access_keys_for_business_manager.htm&amp;type=5">Create an Access Key</a> (WebDAV, OCAPI, Protected Storefront).</li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-developer-tooling/guide/configuration.html">B2C CLI: Configuration</a> (<code>dw.json</code>, instâncias, segredos).</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

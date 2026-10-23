@@ -1,0 +1,741 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>03 · Promoções, carrinho e checkout · Guia SFCC</title>
+<meta name="description" content="Campanhas, promoções, qualifiers (customer groups, source codes, cupons), prioridade e exclusividade, basket e order, hook dw.order.calculate, frete, impostos, payment processors e o fluxo de checkout do SFRA.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="03" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Promoções, carrinho e checkout</h1>
+  <p class="lead">O <a class="text-link" href="02-catalogo-precos-inventario.html">tema 02</a> mostrou como a plataforma decide o que existe, quanto custa e se pode ser vendido. Este tema segue o comprador até o pedido: como campanhas e promoções são ativadas e combinadas, como a cesta (<em>basket</em>) é recalculada a cada mudança, onde entram frete e impostos, e o que acontece, linha a linha, quando o SFRA transforma uma cesta num pedido.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>Campaign</dt><dd>Um contêiner com agenda (início e fim) e qualifiers, que agrupa <em>experiences</em>: promoções, slot configurations e sorting rules. É definida por site e pode ser habilitada ou desabilitada. Promoções habilitadas numa campanha desabilitada ficam inativas.</dd>
+  <dt>Promotion</dt><dd>Uma regra com classe (product, order ou shipping), condições e desconto. Tem atributos como <em>rank</em>, <em>exclusivity</em> e <em>callout message</em>.</dd>
+  <dt>Qualifier</dt><dd>O que torna o comprador elegível: <strong>customer group</strong>, <strong>source code</strong> ou <strong>coupon</strong>.</dd>
+  <dt>Basket</dt><dd>A cesta do comprador (<code>dw.order.Basket</code>). Tem product line items, shipments, payment instruments, coupon line items e price adjustments. É recalculada a cada mudança.</dd>
+  <dt>Order</dt><dd>O pedido (<code>dw.order.Order</code>) criado a partir da basket com <code>OrderMgr.createOrder()</code>. Tem status próprio, além de status de confirmação, de pagamento, de envio e de exportação.</dd>
+  <dt>Line item</dt><dd>Uma linha da basket ou do pedido: produto (<code>ProductLineItem</code>), frete (<code>ShippingLineItem</code>), gift certificate, cupom (<code>CouponLineItem</code>), bonus.</dd>
+  <dt>Price adjustment</dt><dd>O desconto aplicado por uma promoção, numa linha (produto ou frete) ou no pedido.</dd>
+  <dt>Payment processor</dt><dd>Configuração de BM que liga um payment method (cartão, PayPal…) a uma implementação. No SFRA, o ID do processor define o hook <code>app.payment.processor.&lt;id&gt;</code>.</dd>
+</dl>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="campanhas" data-k="cap. 2">
+<h2>Campanhas, promoções e qualifiers</h2>
+<div class="prose">
+<script type="text/plain" class="mmd" data-caption="campanha como contêiner de experiences">
+flowchart TB
+  CAMP["Campaign: black-friday-2026<br/>agenda: 27/11 a 30/11<br/>qualifiers: grupo 'Everyone'"]
+  CAMP --> P1["Promotion<br/>10% em calçados (product)"]
+  CAMP --> P2["Promotion<br/>R$ 50 off acima de R$ 500 (order)<br/>+ coupon BF50"]
+  CAMP --> P3["Promotion<br/>frete grátis (shipping)"]
+  CAMP --> SL["Slot configuration<br/>banner da home"]
+  CAMP --> SR["Sorting rule<br/>ofertas primeiro"]
+</script>
+
+<h3 id="classes">As três classes de promoção</h3>
+<table>
+<thead><tr><th>Classe</th><th>O que desconta</th><th>Exemplos</th></tr></thead>
+<tbody>
+<tr><td><strong>Product</strong></td><td>O preço de produtos elegíveis (standard, variante, bundle, options)</td><td>% off, $ off, fixed price, price from price book, buy X get Y, bonus product</td></tr>
+<tr><td><strong>Order</strong></td><td>O merchandise total depois dos descontos de produto (o desconto é rateado entre os itens)</td><td>% ou $ off acima de um valor, bonus product, tiers</td></tr>
+<tr><td><strong>Shipping</strong></td><td>O custo de frete do shipment</td><td>Frete grátis, fixed price, % off</td></tr>
+</tbody>
+</table>
+
+<h3 id="qualifiers">Qualifiers: customer group, source code e coupon</h3>
+<p>Dentro de uma campanha, os qualifiers são, por padrão, um <strong>OU implícito</strong>: basta atender a um deles. Uma promoção pode ser configurada como <em>All</em> (E lógico) quando precisa exigir, por exemplo, grupo VIP <em>e</em> cupom. As experiences herdam os qualifiers da campanha, e a herança pode ser desligada, mas não sobrescrita.</p>
+<table>
+<thead><tr><th>Recurso</th><th>Coupon</th><th>Source code</th></tr></thead>
+<tbody>
+<tr><td>Como o comprador o usa</td><td>Digita no carrinho</td><td>Chega pela URL no início da sessão (afiliado, e-mail, catálogo impresso)</td></tr>
+<tr><td>Pode ser invisível ao comprador</td><td>Não</td><td>Sim</td></tr>
+<tr><td>Vários na mesma compra</td><td>Sim</td><td>Não (um ativo por sessão)</td></tr>
+<tr><td>Ativa price book</td><td>Não</td><td><strong>Sim</strong></td></tr>
+<tr><td>Redireciona para produto, categoria ou URL</td><td>Não</td><td><strong>Sim</strong></td></tr>
+<tr><td>Limites de resgate (por cliente, quantidade, frequência)</td><td>Sim</td><td>Não</td></tr>
+</tbody>
+</table>
+<p>Os <strong>customer groups</strong> podem ser estáticos (lista de clientes), dinâmicos (regra sobre atributos do cliente ou da sessão) ou os de sistema: <em>Everyone</em>, <em>Registered</em> e <em>Unregistered</em>.</p>
+
+<h3 id="cupons">Cupons</h3>
+<ul>
+  <li><strong>Single code</strong>: um código para todos (ex.: <code>FRETEGRATIS</code>).</li>
+  <li><strong>Multiple codes</strong>: códigos únicos (importados ou gerados pelo sistema com prefixo); cada um pode ter limite de uso.</li>
+  <li>Os limites de resgate são validados quando o cupom entra na cesta e a cada recálculo. Para convidados, o limite por cliente é validado depois que o e-mail é informado no billing.</li>
+  <li>O cupom precisa estar <strong>atribuído a uma campanha</strong> com promoção ativa; senão, a API recusa com <code>NO_ACTIVE_PROMOTION</code>.</li>
+</ul>
+<p>No SFRA, <code>Cart-AddCoupon</code> chama <code>basket.createCouponLineItem(code, true)</code> dentro de uma transação e traduz o <code>errorCode</code> da exceção em mensagem. Trecho real:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="app_storefront_base/cartridge/controllers/Cart.js (trecho de AddCoupon)">
+try {
+    Transaction.wrap(function () {
+        return currentBasket.createCouponLineItem(req.querystring.couponCode, true);
+    });
+} catch (e) {
+    error = true;
+    var errorCodes = {
+        COUPON_CODE_ALREADY_IN_BASKET: 'error.coupon.already.in.cart',
+        COUPON_ALREADY_IN_BASKET: 'error.coupon.cannot.be.combined',
+        COUPON_CODE_ALREADY_REDEEMED: 'error.coupon.already.redeemed',
+        COUPON_CODE_UNKNOWN: 'error.unable.to.add.coupon',
+        COUPON_DISABLED: 'error.unable.to.add.coupon',
+        REDEMPTION_LIMIT_EXCEEDED: 'error.unable.to.add.coupon',
+        TIMEFRAME_REDEMPTION_LIMIT_EXCEEDED: 'error.unable.to.add.coupon',
+        NO_ACTIVE_PROMOTION: 'error.unable.to.add.coupon',
+        default: 'error.unable.to.add.coupon'
+    };
+    var errorMessageKey = errorCodes[e.errorCode] || errorCodes.default;
+    errorMessage = Resource.msg(errorMessageKey, 'cart', null);
+}
+// sucesso: recalcula a cesta (o hook dw.order.calculate aplica as promoções)
+Transaction.wrap(function () {
+    basketCalculationHelpers.calculateTotals(currentBasket);
+});
+</script>
+
+<h3 id="source-codes">Source codes</h3>
+<p>Um <em>source code group</em> tem especificações de código (literais ou com curingas <code>?</code>, <code>*</code> e <code>[n..m]</code>), validade, duração do cookie e, opcionalmente, redirects, price books e atributos. Quando a URL traz um source code válido, a sessão passa a ter esse código ativo, e com ele as promoções e os price books associados. O código pode chegar por um parâmetro de URL reconhecido pela plataforma ou ser aplicado por script:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/app_custom/cartridge/controllers/Partner.js">
+'use strict';
+
+var server = require('server');
+
+/**
+ * Landing de parceiro: aplica o source code da URL e redireciona.
+ * Ex.: /on/demandware.store/Sites-RefArch-Site/pt_BR/Partner-Land?code=REVISTA10
+ */
+server.get('Land', function (req, res, next) {
+    var URLUtils = require('dw/web/URLUtils');
+    var code = req.querystring.code;
+    if (code) {
+        // dw.system.Session#setSourceCode devolve um Status (ERROR se o código não existe ou expirou)
+        var status = req.session.raw.setSourceCode(code);
+        if (status.error) {
+            require('dw/system/Logger').getLogger('promo').warn('source code inválido: {0}', code);
+        }
+    }
+    res.redirect(URLUtils.url('Home-Show'));
+    next();
+});
+
+module.exports = server.exports();
+</script>
+<aside class="callout" data-kind="note">
+<p><code>dw.system.Session#setSourceCode(sourceCode)</code> devolve um <code>dw.system.Status</code>. A ajuda descreve também o processamento automático por URL e por cookie (com a duração definida no grupo ou em <em>Site Preferences &gt; Source-Codes</em>) e os redirects configurados no grupo. Só um source code fica ativo por sessão.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="prioridade" data-k="cap. 3">
+<h2>Ordem de aplicação, rank e exclusividade</h2>
+<div class="prose">
+<p>Quando várias promoções se aplicam à mesma cesta, a plataforma não testa todas as combinações. Ela segue regras <strong>fixas</strong> de prioridade, que você só influencia com <em>rank</em>, <em>exclusivity</em> e grupos de exclusividade. A sequência resultante nem sempre dá o melhor valor ao comprador; isso está documentado.</p>
+
+<h3 id="ordem-categorias">1. Por categoria de exclusividade e classe</h3>
+<ol class="steps">
+  <li>Global exclusive</li>
+  <li>Product class-exclusive</li>
+  <li>Product não exclusiva</li>
+  <li>Order class-exclusive</li>
+  <li>Order não exclusiva (calculada sobre o merchandise total; o desconto é rateado entre os produtos)</li>
+  <li>Shipping class-exclusive</li>
+  <li>Shipping não exclusiva</li>
+</ol>
+
+<h3 id="ordem-dentro">2. Dentro de cada categoria</h3>
+<ol class="steps">
+  <li>Promoções de A/B test, depois as de campanha</li>
+  <li>Por <strong>rank</strong>: as ranqueadas antes das sem rank, e o <strong>menor rank primeiro</strong></li>
+  <li>Por tipo de desconto: fixed price → total fixed price → free → price book price → amount off → percent off → bonus product → choice of bonus → free product shipping → fixed price product shipping</li>
+  <li>Por valor do desconto (o melhor para o comprador primeiro)</li>
+  <li>Por ID, em ordem alfabética</li>
+</ol>
+
+<h3 id="exclusividade">Exclusividade</h3>
+<table>
+<thead><tr><th>Valor</th><th>Efeito</th></tr></thead>
+<tbody>
+<tr><td><code>NO</code> (padrão)</td><td>Combina com qualquer promoção</td></tr>
+<tr><td><code>CLASS</code></td><td>Não combina com outra da mesma classe (para product: no mesmo produto; para shipping: no mesmo shipment)</td></tr>
+<tr><td><code>GLOBAL</code></td><td>Não combina com nenhuma outra promoção</td></tr>
+</tbody>
+</table>
+<p>As listas <em>mutually exclusive</em> e <em>combinable</em> de cada promoção (ou de grupos de exclusividade) <strong>sobrescrevem</strong> as regras gerais: duas promoções marcadas como mutuamente exclusivas não combinam mesmo com exclusividade <code>NO</code>, e duas combináveis combinam mesmo com <code>GLOBAL</code>.</p>
+
+<aside class="callout" data-kind="exam">
+<p>"10% para todos e 20% para registrados; registrados não podem ganhar os dois." → marque as duas promoções de produto como <strong>CLASS</strong> exclusive. A de 20% vem primeiro (percent off com o maior valor) e bloqueia a de 10% nos mesmos produtos.</p>
+</aside>
+
+<h3 id="ver-promos">Promoções na PDP e "falta pouco para…"</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/app_custom/cartridge/scripts/helpers/promoHelpers.js">
+'use strict';
+
+var PromotionMgr = require('dw/campaign/PromotionMgr');
+var collections = require('*/cartridge/scripts/util/collections');
+
+/** Callouts das promoções em que o produto é o produto descontado. */
+function calloutsFor(product) {
+    var plan = PromotionMgr.getActiveCustomerPromotions(); // considera grupos, source code e cupons da sessão
+    return collections.map(plan.getProductPromotionsForDiscountedProduct(product), function (promo) {
+        return { id: promo.ID, callout: promo.calloutMsg ? promo.calloutMsg.markup : '' };
+    });
+}
+
+/** "Faltam R$ X para ganhar…": descontos de pedido quase alcançados. */
+function approachingOrderDiscounts(basket) {
+    var discountPlan = PromotionMgr.getDiscounts(basket);
+    return collections.map(discountPlan.getApproachingOrderDiscounts(), function (ad) {
+        return {
+            promotion: ad.discount.promotion.ID,
+            missing: ad.conditionThreshold.subtract(ad.merchandiseTotal).value
+        };
+    });
+}
+
+module.exports = { calloutsFor: calloutsFor, approachingOrderDiscounts: approachingOrderDiscounts };
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="basket" data-k="cap. 4">
+<h2>A basket e o seu ciclo de vida</h2>
+<div class="prose">
+<p>A basket pertence à sessão do comprador (ou ao customer registrado, quando a persistência de baskets está ligada nas preferências do site). Pontos-chave da API:</p>
+<table>
+<thead><tr><th>Método</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td><code>BasketMgr.getCurrentBasket()</code></td><td>Lê a basket atual; devolve <code>null</code> se não existir. Use nas leituras (minicart, PDP).</td></tr>
+<tr><td><code>BasketMgr.getCurrentOrNewBasket()</code></td><td>Cria a basket se preciso. Use só quando o comprador vai alterar a cesta (adicionar ao carrinho).</td></tr>
+<tr><td><code>basket.createProductLineItem(pid, optionModel, shipment)</code></td><td>Adiciona produto (no SFRA, via <code>cartHelpers.addProductToCart</code>).</td></tr>
+<tr><td><code>basket.createCouponLineItem(code, true)</code></td><td>Adiciona cupom (<code>true</code> = validar o código).</td></tr>
+<tr><td><code>basket.createShipment(id)</code> / <code>defaultShipment</code></td><td>Shipments (multi-ship).</td></tr>
+<tr><td><code>basket.createPaymentInstrument(method, amount)</code></td><td>Pagamento.</td></tr>
+<tr><td><code>HookMgr.callHook('dw.order.calculate', 'calculate', basket)</code></td><td>Recalcula preços, promoções, frete, impostos e totais.</td></tr>
+</tbody>
+</table>
+<aside class="callout" data-kind="warn">
+<p><code>getCurrentOrNewBasket()</code> num request de leitura (como o minicart de toda página) cria baskets vazias para cada visitante: desperdício de objetos e de quota. Leitura usa <code>getCurrentBasket()</code> e trata o <code>null</code>.</p>
+</aside>
+
+<h3 id="calculate">O hook dw.order.calculate</h3>
+<p>Todo recálculo de cesta no SFRA passa por <code>basketCalculationHelpers.calculateTotals(basket)</code>, que chama o hook <code>dw.order.calculate</code>. O SFRA registra esse hook (e <code>dw.order.calculateShipping</code> e <code>dw.order.calculateTax</code>) no <code>hooks.json</code> do <code>app_storefront_base</code>. A ordem do cálculo é importante:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="app_storefront_base/cartridge/scripts/hooks/cart/calculate.js (estrutura de exports.calculate)">
+exports.calculate = function (basket) {
+    calculateProductPrices(basket);          // 1. preço de cada linha (price model, por quantidade acumulada)
+    calculateGiftCertificatePrices(basket);  // 2. gift certificates
+    PromotionMgr.applyDiscounts(basket);     // 3. promoções de produto e de pedido (antes do frete)
+    HookMgr.callHook('dw.order.calculateShipping', 'calculateShipping', basket); // 4. ShippingMgr.applyShippingCost
+    PromotionMgr.applyDiscounts(basket);     // 5. de novo, agora com as promoções de frete
+    calculateProductPrices(basket);          // 6. reajusta linhas bonus (preço 0 vira preço + ajuste)
+    HookMgr.callHook('dw.order.calculateTax', 'calculateTax', basket); // 7. impostos (hook app.basket.taxes)
+    basket.updateTotals();                   // 8. totais
+    return new Status(Status.OK);
+};
+</script>
+
+<script type="text/plain" class="src" data-lang="json" data-file="app_storefront_base/hooks.json (trecho)">
+{
+    "hooks": [
+        { "name": "dw.order.calculate", "script": "./cartridge/scripts/hooks/cart/calculate.js" },
+        { "name": "dw.order.calculateShipping", "script": "./cartridge/scripts/hooks/cart/calculate.js" },
+        { "name": "dw.order.calculateTax", "script": "./cartridge/scripts/hooks/cart/calculate.js" },
+        { "name": "app.payment.processor.default", "script": "./cartridge/scripts/hooks/payment/processor/default" },
+        { "name": "app.payment.processor.basic_credit", "script": "./cartridge/scripts/hooks/payment/processor/basic_credit" },
+        { "name": "app.payment.form.processor.basic_credit", "script": "./cartridge/scripts/hooks/payment/processor/basic_credit_form_processor" }
+    ]
+}
+</script>
+<aside class="callout" data-kind="best">
+<p>Para trocar o cálculo de impostos por um serviço externo, <strong>não</strong> reescreva o <code>calculate.js</code> inteiro. O SFRA chama o hook <code>app.basket.taxes</code> (via <code>hooksHelper</code>, com o cálculo padrão como fallback). Registre esse hook no seu cartridge e devolva o formato esperado (<code>{ taxes: [{ uuid, value, amount }], custom: {} }</code>). O mesmo padrão vale para <code>app.validate.order</code>, <code>app.validate.basket</code>, <code>app.fraud.detection</code> e <code>app.post.auth</code>. Veja hooks no <a class="text-link" href="07-cartridges.html">tema 07</a>.</p>
+</aside>
+
+<h3 id="hook-impostos">Exemplo: hook de impostos customizado</h3>
+<script type="text/plain" class="src" data-lang="json" data-file="cartridges/int_tax_acme/package.json">
+{
+    "name": "int_tax_acme",
+    "hooks": "./hooks.json"
+}
+</script>
+<script type="text/plain" class="src" data-lang="json" data-file="cartridges/int_tax_acme/hooks.json">
+{
+    "hooks": [
+        { "name": "app.basket.taxes", "script": "./cartridge/scripts/hooks/taxes.js" }
+    ]
+}
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/int_tax_acme/cartridge/scripts/hooks/taxes.js">
+'use strict';
+
+var collections = require('*/cartridge/scripts/util/collections');
+var taxService = require('*/cartridge/scripts/services/taxService');
+
+/**
+ * Hook app.basket.taxes: devolve o imposto de cada line item pelo UUID.
+ * amount=false → value é uma taxa (0.18 = 18%); amount=true → value é o valor em dinheiro.
+ * @param {dw.order.Basket} basket
+ * @returns {{taxes: Array<{uuid: string, value: number, amount: boolean}>, custom: Object}}
+ */
+function calculateTaxes(basket) {
+    var lines = collections.map(basket.getAllLineItems(), function (li) {
+        return { uuid: li.UUID, net: li.adjustedNetPrice ? li.adjustedNetPrice.value : 0 };
+    });
+    var result = taxService.call({ address: basket.defaultShipment.shippingAddress, lines: lines });
+    if (!result.ok) {
+        // sem resposta do provedor: não bloqueia a cesta, mas avisa no log e marca a basket
+        return { taxes: [], custom: { taxPending: true } };
+    }
+    return {
+        taxes: result.object.lines.map(function (l) { return { uuid: l.uuid, value: l.rate, amount: false }; }),
+        custom: { taxPending: false }
+    };
+}
+
+module.exports = { calculateTaxes: calculateTaxes };
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="frete-impostos" data-k="cap. 5">
+<h2>Frete e impostos</h2>
+<div class="prose">
+<h3 id="shipping-methods">Shipping methods</h3>
+<p>Em <em>Merchant Tools &gt; Ordering &gt; Shipping Methods</em> você define, por site, os métodos de envio: custo base por shipment, faixas de custo (por peso, total ou quantidade), custos por produto (surcharge), exclusões de produtos e restrições por endereço, customer group ou moeda. Um deles é o <strong>default</strong>. No código:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/app_custom/cartridge/scripts/helpers/shippingHelpers.js">
+'use strict';
+
+var ShippingMgr = require('dw/order/ShippingMgr');
+var collections = require('*/cartridge/scripts/util/collections');
+
+/** Métodos aplicáveis ao shipment (endereço, produtos e restrições) com o custo de cada um. */
+function applicableMethods(shipment) {
+    var model = ShippingMgr.getShipmentShippingModel(shipment);
+    return collections.map(model.getApplicableShippingMethods(), function (method) {
+        return {
+            id: method.ID,
+            name: method.displayName,
+            cost: model.getShippingCost(method).getAmount().value,
+            isDefault: method.isDefaultMethod()
+        };
+    });
+}
+
+module.exports = { applicableMethods: applicableMethods };
+</script>
+<p>O SFRA expõe isso em <code>CheckoutShippingServices-UpdateShippingMethodsList</code> e <code>SelectShippingMethod</code>; o helper <code>scripts/checkout/shippingHelpers.js</code> encapsula a seleção.</p>
+
+<h3 id="impostos">Impostos: Net × Gross</h3>
+<table>
+<thead><tr><th>Política</th><th>O preço do price book…</th><th>Típico em</th></tr></thead>
+<tbody>
+<tr><td><strong>Net</strong> (<code>TaxMgr.TAX_POLICY_NET</code>)</td><td>não inclui imposto; o imposto é somado no fim</td><td>EUA</td></tr>
+<tr><td><strong>Gross</strong> (<code>TaxMgr.TAX_POLICY_GROSS</code>)</td><td>já inclui imposto; o imposto é calculado "por dentro"</td><td>Europa, Brasil</td></tr>
+</tbody>
+</table>
+<p>A política é definida na criação do site (e é difícil mudar depois). O cálculo padrão usa a <strong>tax class</strong> de cada produto (atributo <code>tax-class-id</code>) e a <strong>tax jurisdiction</strong> do endereço de entrega, configuradas em <em>Merchant Tools &gt; Ordering &gt; Taxation</em>: <code>TaxMgr.getTaxRate(taxClassID, jurisdictionID)</code>. Projetos reais costumam delegar a um provedor externo (pelo hook <code>app.basket.taxes</code>).</p>
+<aside class="callout" data-kind="exam">
+<p>"Os preços do price book já incluem impostos e o total não pode somar imposto de novo." → site <strong>Gross</strong>. "Imposto aparece separado e soma no total" → <strong>Net</strong>. A política é escolhida na criação do site, junto com a moeda padrão (veja o <a class="text-link" href="14-business-manager.html">tema 14</a>).</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="pagamento" data-k="cap. 6">
+<h2>Payment methods e processors</h2>
+<div class="prose">
+<p>Em <em>Merchant Tools &gt; Ordering &gt; Payment Methods</em> você ativa métodos (Credit Card, PayPal, Gift Certificate…) e cartões (Visa, Master…) e associa cada método a um <strong>payment processor</strong> (<em>Payment Processors</em>, na mesma área). O SFRA usa o ID do processor para descobrir quem processa:</p>
+<ol class="steps">
+  <li><strong>Handle</strong>, no momento do pagamento no checkout (<code>CheckoutServices-SubmitPayment</code>): valida os dados e cria o <code>PaymentInstrument</code> na basket. O hook é <code>app.payment.processor.&lt;processor id em minúsculas&gt;</code>, função <code>Handle</code>.</li>
+  <li><strong>Authorize</strong>, já com o pedido criado (<code>COHelpers.handlePayments</code>): fala com o gateway. Mesmo hook, função <code>Authorize(orderNumber, paymentInstrument, paymentProcessor)</code>.</li>
+</ol>
+<script type="text/plain" class="src" data-lang="js" data-file="app_storefront_base/cartridge/scripts/checkout/checkoutHelpers.js (trecho de handlePayments)">
+var paymentProcessor = PaymentMgr
+    .getPaymentMethod(paymentInstrument.paymentMethod)
+    .paymentProcessor;
+
+if (HookMgr.hasHook('app.payment.processor.' + paymentProcessor.ID.toLowerCase())) {
+    authorizationResult = HookMgr.callHook(
+        'app.payment.processor.' + paymentProcessor.ID.toLowerCase(),
+        'Authorize',
+        orderNumber,
+        paymentInstrument,
+        paymentProcessor
+    );
+} else {
+    authorizationResult = HookMgr.callHook('app.payment.processor.default', 'Authorize');
+}
+
+if (authorizationResult.error) {
+    Transaction.wrap(function () { OrderMgr.failOrder(order, true); }); // reabre a basket
+    result.error = true;
+}
+</script>
+
+<h3 id="novo-gateway">Integrando um gateway novo</h3>
+<script type="text/plain" class="src" data-lang="json" data-file="cartridges/int_acmepay/hooks.json">
+{
+    "hooks": [
+        { "name": "app.payment.processor.acmepay", "script": "./cartridge/scripts/hooks/payment/processor/acmepay" },
+        { "name": "app.payment.form.processor.acmepay", "script": "./cartridge/scripts/hooks/payment/processor/acmepay_form_processor" }
+    ]
+}
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/int_acmepay/cartridge/scripts/hooks/payment/processor/acmepay.js">
+'use strict';
+
+var Transaction = require('dw/system/Transaction');
+var Resource = require('dw/web/Resource');
+var acmepayService = require('*/cartridge/scripts/services/acmepayService');
+
+/** Handle: guarda na basket o token gerado no navegador (nunca o PAN). */
+function Handle(basket, paymentInformation) {
+    Transaction.wrap(function () {
+        basket.getPaymentInstruments('ACMEPAY').toArray().forEach(function (pi) {
+            basket.removePaymentInstrument(pi);
+        });
+        var pi = basket.createPaymentInstrument('ACMEPAY', basket.totalGrossPrice);
+        pi.custom.acmepayToken = paymentInformation.token.value;
+    });
+    return { fieldErrors: {}, serverErrors: [], error: false };
+}
+
+/** Authorize: chama o gateway pelo Service Framework e grava o resultado na transação. */
+function Authorize(orderNumber, paymentInstrument, paymentProcessor) {
+    var result = acmepayService.call({
+        orderNo: orderNumber,
+        amount: paymentInstrument.paymentTransaction.amount.value,
+        currency: paymentInstrument.paymentTransaction.amount.currencyCode,
+        token: paymentInstrument.custom.acmepayToken
+    });
+    if (!result.ok || result.object.status !== 'AUTHORIZED') {
+        return { fieldErrors: [], serverErrors: [Resource.msg('error.technical', 'checkout', null)], error: true };
+    }
+    Transaction.wrap(function () {
+        paymentInstrument.paymentTransaction.setTransactionID(result.object.transactionId);
+        paymentInstrument.paymentTransaction.setPaymentProcessor(paymentProcessor);
+    });
+    return { fieldErrors: [], serverErrors: [], error: false };
+}
+
+exports.Handle = Handle;
+exports.Authorize = Authorize;
+</script>
+<p>No BM, crie o processor com ID <code>ACMEPAY</code> e o payment method <code>ACMEPAY</code> apontando para ele. O hook é resolvido pelo ID em minúsculas: <code>app.payment.processor.acmepay</code>.</p>
+<aside class="callout" data-kind="warn">
+<p>Dados de cartão: o SFRA de demonstração (<code>basic_credit</code>) grava número e validade no payment instrument, o que serve só para demo. Em produção use tokenização do gateway (o navegador envia o cartão direto ao provedor) e guarde apenas o token. Nunca registre dados de cartão em log.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checkout" data-k="cap. 7">
+<h2>O checkout do SFRA, passo a passo</h2>
+<div class="prose">
+<p>O checkout do SFRA é uma página única (<code>Checkout-Begin</code>) com estágios <em>shipping → payment → placeOrder</em>, que conversa por AJAX com os controllers <code>CheckoutShippingServices</code>, <code>CheckoutServices</code> e <code>CheckoutAddressServices</code>. O pedido nasce em <code>CheckoutServices-PlaceOrder</code>:</p>
+<script type="text/plain" class="mmd" data-caption="CheckoutServices-PlaceOrder no SFRA">
+flowchart TB
+  A["basket atual existe?"] --> B["validateProducts<br/>(estoque, online)"]
+  B --> C["hook app.validate.order"]
+  C --> D["endereços de entrega e cobrança presentes?"]
+  D --> E["calculateTotals<br/>(dw.order.calculate)"]
+  E --> F["validatePayment +<br/>calculatePaymentTransaction"]
+  F --> G["COHelpers.createOrder<br/>OrderMgr.createOrder(basket)<br/>status CREATED"]
+  G --> H["handlePayments<br/>app.payment.processor.*.Authorize"]
+  H -->|erro| X["OrderMgr.failOrder(order, true)<br/>basket reaberta"]
+  H --> I["hook app.fraud.detection"]
+  I -->|fail| X
+  I --> J["COHelpers.placeOrder<br/>OrderMgr.placeOrder → status NEW<br/>confirmation CONFIRMED (ou NOTCONFIRMED se 'flag')<br/>export READY"]
+  J --> K["e-mail de confirmação<br/>+ redirect para Order-Confirm"]
+</script>
+
+<h3 id="status-pedido">Status do pedido</h3>
+<table>
+<thead><tr><th>Status (<code>Order.ORDER_STATUS_*</code>)</th><th>Quando</th></tr></thead>
+<tbody>
+<tr><td><code>CREATED</code> (0)</td><td>Logo após <code>createOrder</code>; ainda não colocado</td></tr>
+<tr><td><code>NEW</code> (3) / <code>OPEN</code> (4)</td><td>Depois de <code>placeOrder</code>; o pedido existe para o negócio</td></tr>
+<tr><td><code>COMPLETED</code> (5)</td><td>Concluído</td></tr>
+<tr><td><code>CANCELLED</code> (6)</td><td><code>OrderMgr.cancelOrder</code></td></tr>
+<tr><td><code>REPLACED</code> (7)</td><td>Substituído por outro pedido</td></tr>
+<tr><td><code>FAILED</code> (8)</td><td><code>OrderMgr.failOrder</code> (só a partir de CREATED)</td></tr>
+</tbody>
+</table>
+<p>Além dele, há <strong>export status</strong> (<code>NOTEXPORTED</code>, <code>READY</code>, <code>EXPORTED</code>, <code>FAILED</code>), que os jobs de exportação para ERP ou OMS usam; <strong>confirmation status</strong>; <strong>payment status</strong>; e <strong>shipping status</strong>.</p>
+
+<h3 id="placeorder-trecho">O trecho que coloca o pedido</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="app_storefront_base/cartridge/scripts/checkout/checkoutHelpers.js (placeOrder)">
+function placeOrder(order, fraudDetectionStatus) {
+    var result = { error: false };
+    try {
+        Transaction.begin();
+        var placeOrderStatus = OrderMgr.placeOrder(order);
+        if (placeOrderStatus === Status.ERROR) {
+            throw new Error();
+        }
+        if (fraudDetectionStatus.status === 'flag') {
+            order.setConfirmationStatus(Order.CONFIRMATION_STATUS_NOTCONFIRMED);
+        } else {
+            order.setConfirmationStatus(Order.CONFIRMATION_STATUS_CONFIRMED);
+        }
+        order.setExportStatus(Order.EXPORT_STATUS_READY); // o job de export pega daqui
+        Transaction.commit();
+    } catch (e) {
+        Transaction.wrap(function () { OrderMgr.failOrder(order, true); });
+        result.error = true;
+    }
+    return result;
+}
+</script>
+
+<h3 id="validacao-custom">Adicionando uma validação sem tocar no base</h3>
+<p>Exemplo: bloquear pedidos com mais de 10 unidades de um mesmo produto, usando o hook <code>app.validate.order</code> que o próprio <code>PlaceOrder</code> chama:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/app_custom/cartridge/scripts/hooks/validateOrder.js">
+'use strict';
+
+var Resource = require('dw/web/Resource');
+var collections = require('*/cartridge/scripts/util/collections');
+var base = require('app_storefront_base/cartridge/scripts/hooks/validateOrder');
+
+/**
+ * app.validate.order: roda a validação padrão e acrescenta a regra do negócio.
+ * @param {dw.order.Basket} basket
+ * @returns {{error: boolean, message: string}}
+ */
+function validateOrder(basket) {
+    var result = base.validateOrder(basket);
+    if (result.error) return result;
+
+    var tooMany = collections.find(basket.productLineItems, function (pli) {
+        return pli.quantityValue > 10;
+    });
+    if (tooMany) {
+        return { error: true, message: Resource.msgf('error.max.qty', 'checkout', null, 10) };
+    }
+    return result;
+}
+
+exports.validateOrder = validateOrder;
+</script>
+<script type="text/plain" class="src" data-lang="json" data-file="cartridges/app_custom/hooks.json">
+{
+    "hooks": [
+        { "name": "app.validate.order", "script": "./cartridge/scripts/hooks/validateOrder.js" }
+    ]
+}
+</script>
+<aside class="callout" data-kind="note">
+<p>Na versão do SFRA analisada, <code>hooksHelper(name, fn, args…, fallback)</code> chama o hook registrado se existir e, senão, a função padrão. Quando você registra o hook, o fallback <strong>não</strong> roda; por isso o exemplo chama a validação base explicitamente.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="carrinho-sfra" data-k="cap. 8">
+<h2>O carrinho do SFRA</h2>
+<div class="prose">
+<p>As rotas do carrinho ficam em <code>controllers/Cart.js</code>:</p>
+<table>
+<thead><tr><th>Rota</th><th>Método</th><th>Papel</th></tr></thead>
+<tbody>
+<tr><td><code>Cart-Show</code></td><td>GET</td><td>Página do carrinho</td></tr>
+<tr><td><code>Cart-MiniCart</code></td><td>GET (include)</td><td>Ícone com a quantidade (remote include)</td></tr>
+<tr><td><code>Cart-AddProduct</code></td><td>POST</td><td>Adiciona produto (AJAX da PDP)</td></tr>
+<tr><td><code>Cart-UpdateQuantity</code></td><td>GET</td><td>Altera a quantidade</td></tr>
+<tr><td><code>Cart-RemoveProductLineItem</code></td><td>GET</td><td>Remove a linha</td></tr>
+<tr><td><code>Cart-AddCoupon</code> / <code>RemoveCouponLineItem</code></td><td>GET</td><td>Cupons (com <code>csrfProtection.validateAjaxRequest</code>)</td></tr>
+<tr><td><code>Cart-SelectShippingMethod</code></td><td>POST</td><td>Frete estimado no carrinho</td></tr>
+<tr><td><code>Cart-AddBonusProducts</code></td><td>POST</td><td>Escolha de brinde (choice of bonus product)</td></tr>
+</tbody>
+</table>
+<p>Toda rota que muda a cesta segue o mesmo padrão: transação → alteração → <code>calculateTotals</code> → <code>new CartModel(basket)</code> → <code>res.json</code>. O JavaScript de cliente (<code>cartridge/client/default/js/cart/cart.js</code>) atualiza o DOM com esse JSON.</p>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/app_custom/cartridge/controllers/Cart.js">
+'use strict';
+
+var server = require('server');
+server.extend(module.superModule);
+
+/**
+ * Depois de adicionar ao carrinho, devolve também a mensagem de "falta pouco"
+ * calculada pelo helper do capítulo 3.
+ */
+server.append('AddProduct', function (req, res, next) {
+    var viewData = res.getViewData();
+    if (!viewData.error) {
+        var BasketMgr = require('dw/order/BasketMgr');
+        var promoHelpers = require('*/cartridge/scripts/helpers/promoHelpers');
+        var basket = BasketMgr.getCurrentBasket();
+        viewData.approaching = basket ? promoHelpers.approachingOrderDiscounts(basket) : [];
+        res.setViewData(viewData);
+    }
+    next();
+});
+
+module.exports = server.exports();
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Desconto calculado no controller ou no template.</strong> Promoção se configura no BM: aparece em relatórios, respeita exclusividade e chega à OCAPI e à SCAPI.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Alterar a basket sem recalcular.</strong> Toda mudança precisa de <code>calculateTotals</code> (o hook <code>dw.order.calculate</code>) dentro de transação; senão totais, promoções e impostos ficam errados.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Reescrever o <code>calculate.js</code> para mudar só os impostos.</strong> Use o hook <code>app.basket.taxes</code>; o resto do pipeline continua do base e recebe as correções de upgrade.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Cancelar pedido com <code>setStatus</code>.</strong> Não devolve estoque nem cupons. Use <code>OrderMgr.cancelOrder()</code> (pedido colocado) ou <code>failOrder()</code> (pedido só criado).</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>"Ativar um price book e redirecionar para uma landing a partir de um link de afiliado" → <strong>source code</strong>.</li>
+  <li>"Cada código usado uma só vez" → cupom <strong>multiple codes</strong> com limite de resgate.</li>
+  <li>"Duas promoções que não podem somar" → <strong>exclusivity CLASS</strong> (mesma classe) ou <strong>GLOBAL</strong>.</li>
+  <li>"Ordem de aplicação" → product → order → shipping; dentro de cada uma, rank (menor primeiro), tipo e valor.</li>
+  <li>"Onde o SFRA calcula promoções, frete e impostos?" → hook <strong><code>dw.order.calculate</code></strong>.</li>
+  <li>"Integrar um gateway de pagamento" → payment processor no BM + hook <strong><code>app.payment.processor.&lt;id&gt;</code></strong> com <code>Handle</code> e <code>Authorize</code>.</li>
+  <li>"Status depois de <code>OrderMgr.placeOrder</code>" → <strong>NEW</strong>; export status <strong>READY</strong> no SFRA.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>Promoção não aplica</td><td>Campanha desabilitada ou fora da agenda; qualifier não atendido (grupo, cupom, source code); exclusividade com outra promoção; produto não elegível</td><td>Confira a campanha (habilitada, datas, site), os qualifiers e a exclusividade. A seção <em>Promotion Test</em> e os logs de promoção ajudam; teste com uma cesta mínima.</td></tr>
+<tr><td>Cupom recusado com "unable to add coupon"</td><td><code>COUPON_CODE_UNKNOWN</code>, <code>COUPON_DISABLED</code>, <code>NO_ACTIVE_PROMOTION</code> ou limite</td><td>Logue <code>e.errorCode</code> no catch; confira se o cupom está ativo e atribuído a uma campanha com promoção ativa.</td></tr>
+<tr><td>Duas promoções somaram quando não deviam</td><td>Exclusividade <code>NO</code></td><td>Use CLASS ou GLOBAL, ou liste-as como mutuamente exclusivas.</td></tr>
+<tr><td>Totais errados depois de uma customização</td><td>Alteração na basket sem <code>calculateTotals</code></td><td>Recalcule depois de qualquer mudança, dentro de <code>Transaction.wrap</code>.</td></tr>
+<tr><td>Nenhum shipping method disponível</td><td>Restrições por endereço ou moeda; exclusões de produto; site errado</td><td>Use <code>getInapplicableShippingMethods()</code> para depurar; reveja as configurações do método.</td></tr>
+<tr><td>Imposto zerado</td><td>Produto sem tax class; jurisdição não mapeada; hook externo falhando</td><td>Confira a tax class do produto e a tabela de taxação; olhe o log do hook ou serviço.</td></tr>
+<tr><td>Pedido FAILED depois de autorizar</td><td>Erro no <code>placeOrder</code> ou na detecção de fraude</td><td>Leia os logs custom do checkout; confira se <code>failOrder</code> foi chamado no ponto esperado.</td></tr>
+<tr><td>Pedidos não chegam ao ERP</td><td>Export status diferente de READY ou job de export parado</td><td>Confira <code>exportStatus</code> e o histórico do job em <em>Administration &gt; Operations &gt; Jobs</em>.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Explicar campanha, experience e promoção, e as classes product, order e shipping.</li>
+  <li>Comparar coupon e source code e saber como customer groups qualificam.</li>
+  <li>Descrever a ordem de aplicação e o efeito de rank e exclusividade (NO, CLASS, GLOBAL).</li>
+  <li>Saber quando usar <code>getCurrentBasket</code> e quando usar <code>getCurrentOrNewBasket</code>.</li>
+  <li>Descrever o que o <code>dw.order.calculate</code> do SFRA faz e em que ordem.</li>
+  <li>Diferenciar Net e Gross; saber onde ficam tax classes, jurisdictions e shipping methods.</li>
+  <li>Ligar payment method → payment processor → hook <code>app.payment.processor.*</code> (Handle e Authorize).</li>
+  <li>Seguir <code>PlaceOrder</code> do início ao fim: createOrder, authorize, fraud, placeOrder, failOrder.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Um afiliado manda tráfego com um código que deve ativar um price book especial e levar a uma landing. Qual recurso usar?</p>
+  <ol class="opts-l"><li>Coupon single code</li><li>Source code group com price book e redirect</li><li>Customer group dinâmico</li><li>Atributo custom na sessão</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Só source codes ativam price books e redirecionam; cupons não.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Promoção A (10% em tudo, para Everyone) e promoção B (20% para Registered) não podem somar no mesmo produto. Qual configuração?</p>
+  <ol class="opts-l"><li>Rank igual para as duas</li><li>Exclusivity CLASS nas duas</li><li>Exclusivity NO</li><li>Desabilitar a campanha de A</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> CLASS impede combinar com outra promoção de produto no mesmo produto; a de maior desconto percentual é avaliada primeiro.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Em que ordem o <code>dw.order.calculate</code> do SFRA processa a cesta?</p>
+  <ol class="opts-l"><li>Impostos → promoções → frete</li><li>Preços → promoções → frete → promoções (incluindo frete) → impostos → totais</li><li>Frete → preços → impostos</li><li>Promoções → preços → totais</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> As promoções rodam antes e depois do frete, para que as de frete enxerguem o custo; os impostos vêm por último, antes de <code>updateTotals()</code>.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Você criou o processor <code>ACMEPAY</code>. Qual hook o SFRA chama para autorizar?</p>
+  <ol class="opts-l"><li><code>dw.order.payment.authorize</code></li><li><code>app.payment.processor.acmepay</code>, função <code>Authorize</code></li><li><code>app.payment.form.processor.acmepay</code></li><li><code>dw.ocapi.shop.order.afterPOST</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> <code>handlePayments</code> monta o nome do hook com o ID do processor em minúsculas. O form processor trata o formulário de pagamento no SubmitPayment.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">A autorização falhou depois de <code>OrderMgr.createOrder</code>. O que o SFRA faz?</p>
+  <ol class="opts-l"><li><code>order.setStatus(CANCELLED)</code></li><li><code>OrderMgr.failOrder(order, true)</code>: o pedido vira FAILED, o estoque e os cupons voltam e a basket é reaberta</li><li>Nada; o pedido fica CREATED</li><li><code>OrderMgr.cancelOrder</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> <code>failOrder</code> serve para pedidos ainda não colocados; com <code>true</code>, reabre a basket se possível.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Um controller de leitura do minicart usa <code>BasketMgr.getCurrentOrNewBasket()</code>. Qual é o problema?</p>
+  <ol class="opts-l"><li>Nenhum</li><li>Cria uma basket vazia para cada visitante, desperdiçando objetos e quota; use <code>getCurrentBasket()</code></li><li>Não funciona para registrados</li><li>Quebra o cache de página</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Leitura usa <code>getCurrentBasket()</code> e trata o <code>null</code>.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual destas é a forma recomendada de integrar um provedor externo de impostos no SFRA?</p>
+  <ol class="opts-l"><li>Copiar e editar o <code>calculate.js</code> do base</li><li>Registrar o hook <code>app.basket.taxes</code> num cartridge próprio</li><li>Calcular no ISML do checkout</li><li>Usar um job noturno</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O <code>calculateTax</code> do SFRA delega a <code>app.basket.taxes</code> via <code>hooksHelper</code>.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_campaigns_and_promotions.htm&amp;type=5">Campaigns and Promotions</a></li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_qualifiers.htm&amp;type=5">How Customers Qualify for Promotions</a>: coupon × source code.</li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_promotion_priority_rules.htm&amp;type=5">Promotion Priority Rules</a> e <a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_promotion_compatibility.htm&amp;type=5">Promotion Compatibility</a></li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_promotion_discounts.htm&amp;type=5">Promotion Discounts</a></li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_coupon_redemption.htm&amp;type=5">Coupon Redemption</a> e <a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_defining_source_code_groups.htm&amp;type=5">Source Code Groups</a></li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-promotions-for-developers.html">Customize Promotions</a>: APIs, approaching discounts, PromotionPlan.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-sfra-hooks.html">SFRA Hooks</a></li>
+  <li>Script API: <code>dw.order.Basket</code>, <code>dw.order.OrderMgr</code>, <code>dw.campaign.PromotionMgr</code>, <code>dw.order.ShippingMgr</code>, <code>dw.order.TaxMgr</code>.</li>
+  <li>Código do SFRA: <code>hooks.json</code>, <code>scripts/hooks/cart/calculate.js</code>, <code>controllers/CheckoutServices.js</code>, <code>scripts/checkout/checkoutHelpers.js</code>, <code>controllers/Cart.js</code>.</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

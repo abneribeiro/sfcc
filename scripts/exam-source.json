@@ -1,0 +1,1716 @@
+{
+ "exam": {
+  "questions": "60 (+ até 5 não pontuadas)",
+  "time": "105 min",
+  "passing": "65%",
+  "fee": "US$ 200 · retake US$ 100",
+  "note": "Valores publicados por fontes de terceiros (referência Spring '23). Confirme no exam guide atual do Trailhead antes da prova."
+ },
+ "domains": [
+  {
+   "id": "setup",
+   "name": "B2C Commerce Setup",
+   "w": 11,
+   "themes": [
+    "01",
+    "05",
+    "07",
+    "14",
+    "15",
+    "16"
+   ]
+  },
+  {
+   "id": "site",
+   "name": "Work With a B2C Site",
+   "w": 12,
+   "themes": [
+    "02",
+    "03",
+    "11"
+   ]
+  },
+  {
+   "id": "data",
+   "name": "Data Management Using Business Manager",
+   "w": 24,
+   "themes": [
+    "04",
+    "13",
+    "14",
+    "17",
+    "18",
+    "19",
+    "20",
+    "21"
+   ]
+  },
+  {
+   "id": "dev",
+   "name": "Application Development",
+   "w": 53,
+   "themes": [
+    "06",
+    "08",
+    "09",
+    "10",
+    "12",
+    "17",
+    "18",
+    "19",
+    "20",
+    "22"
+   ]
+  }
+ ],
+ "cards": [
+  {
+   "t": "01",
+   "q": "Sandboxes recebem replicação de dados ou código?",
+   "a": "Não. Replicação vai de Staging para Development e Production (PIG); sandboxes ficam fora."
+  },
+  {
+   "t": "07",
+   "q": "Job de escopo organização não acha o script do step",
+   "a": "O cartridge precisa estar no cartridge path do <strong>Business Manager</strong> (contexto de organização)."
+  },
+  {
+   "t": "01",
+   "q": "Onde o merchandiser deve editar o catálogo?",
+   "a": "<strong>Staging</strong>. Nunca Production."
+  },
+  {
+   "t": "01",
+   "q": "Uma alteração feita em Production sumiu",
+   "a": "foi sobrescrita pela replicação de Staging."
+  },
+  {
+   "t": "06",
+   "q": "Qual a forma recomendada de adicionar funcionalidade ao SFRA?",
+   "a": "criar uma <strong>nova cartridge</strong> (custom/plugin) e colocá-la <strong>à esquerda</strong> de <code>app_storefront_base</code>. Nunca modificar a base."
+  },
+  {
+   "t": "07",
+   "q": "Qual a sequência correta?",
+   "a": "procure a alternativa em que a cartridge que <strong>estende</strong> está <strong>antes</strong> (à esquerda) da que é <strong>estendida</strong>, e <code>app_storefront_base</code> perto do fim."
+  },
+  {
+   "t": "15",
+   "q": "Código subiu mas a loja não mudou",
+   "a": "(1) o <code>code-version</code> do <code>dw.json</code> não é a versão <strong>ativa</strong>; ativar em <code>Code Deployment</code>; ou (2) a cartridge não está no cartridge path; ou (3) <strong>cache</strong> (invalidar)."
+  },
+  {
+   "t": "14",
+   "q": "Como fazer rollback rápido?",
+   "a": "ativar a code version anterior em <code>Administration &gt; Site Development &gt; Code Deployment</code>."
+  },
+  {
+   "t": "14",
+   "q": "O site precisa mudar a moeda padrão",
+   "a": "não é possível alterar após a criação; é preciso <strong>criar um novo site</strong> (ou adicionar moedas permitidas, se o requisito for multi-moeda)."
+  },
+  {
+   "t": "18",
+   "q": "Feed com produtos novos e alterados, sem apagar atributos que não vieram",
+   "a": "<strong>MERGE</strong>."
+  },
+  {
+   "t": "18",
+   "q": "Feed só deve alterar produtos que já existem",
+   "a": "<strong>UPDATE</strong>."
+  },
+  {
+   "t": "18",
+   "q": "Remover atributos obsoletos / deixar o objeto exatamente como no arquivo",
+   "a": "<strong>REPLACE</strong>."
+  },
+  {
+   "t": "18",
+   "q": "Remover alguns produtos e criar outros no mesmo arquivo",
+   "a": "MERGE com <code>mode=&quot;delete&quot;</code> no elemento."
+  },
+  {
+   "t": "02",
+   "q": "Produto importado não aparece na loja",
+   "a": "produto novo sem <code>online-flag</code> fica <strong>offline</strong>; ou falta atribuição de categoria; ou índice não reconstruído."
+  },
+  {
+   "t": "02",
+   "q": "Vários price books aplicáveis dão preços diferentes ao mesmo produto",
+   "a": "Na regra de lookup, vence o <strong>menor preço</strong> entre os price books aplicáveis."
+  },
+  {
+   "t": "02",
+   "q": "Onde ficam os dados de produto?",
+   "a": "Master catalog. <strong>&quot;O que é atribuído ao site?&quot;</strong> → Storefront catalog (exatamente <strong>um</strong> por site)."
+  },
+  {
+   "t": "02",
+   "q": "Produto existe no BM mas não aparece na vitrine",
+   "a": "falta <strong>category assignment</strong> no storefront catalog, produto <strong>offline</strong>, categoria offline, sem preço, ou índice desatualizado."
+  },
+  {
+   "t": "02",
+   "q": "Mesmo produto em dois sites com categorias diferentes",
+   "a": "um master catalog + dois storefront catalogs."
+  },
+  {
+   "t": "02",
+   "q": "Cliente escolhe itens individuais de um look e compra só alguns",
+   "a": "<strong>Product Set</strong>."
+  },
+  {
+   "t": "02",
+   "q": "Kit com preço único, vendido junto",
+   "a": "<strong>Bundle</strong>."
+  },
+  {
+   "t": "02",
+   "q": "Página de categoria mostrar 'Camiseta Azul' como item separado com fotos azuis",
+   "a": "<strong>Variation Group</strong>."
+  },
+  {
+   "t": "02",
+   "q": "Garantia estendida com preço adicional",
+   "a": "<strong>Option Product</strong>."
+  },
+  {
+   "t": "02",
+   "q": "Mostrar preço riscado",
+   "a": "dois price books (lista e venda); SFRA compara."
+  },
+  {
+   "t": "02",
+   "q": "Preço especial para clientes VIP",
+   "a": "price book + campanha/customer group (configuração, não código)."
+  },
+  {
+   "t": "02",
+   "q": "Produto mostra 'esgotado' mas há estoque físico",
+   "a": "lista não atribuída ao site, produto sem registro e <code>Default In-Stock</code> = false, ou <code>Allocation</code> zerada."
+  },
+  {
+   "t": "02",
+   "q": "Vender produto que chega mês que vem",
+   "a": "<strong>Pre-order</strong> (antes do lançamento) ou <strong>Backorder</strong> (produto já existente, temporariamente sem estoque)."
+  },
+  {
+   "t": "02",
+   "q": "Produto digital sempre disponível",
+   "a": "<strong>Perpetual</strong>."
+  },
+  {
+   "t": "03",
+   "q": "Habilitar novo meio de pagamento",
+   "a": "criar/ativar <strong>Payment Method</strong>, associar a um <strong>Payment Processor</strong>, e o processor ter <strong>hook</strong> implementado."
+  },
+  {
+   "t": "03",
+   "q": "Método de frete não aparece para um CEP",
+   "a": "<strong>Address Exclusion</strong> ou <strong>customer group</strong> restrito, ou moeda diferente."
+  },
+  {
+   "t": "03",
+   "q": "Produto pesado não pode ir por Expresso",
+   "a": "<strong>Product Exclusion</strong> no shipping method."
+  },
+  {
+   "t": "03",
+   "q": "Frete grátis acima de R$200",
+   "a": "<strong>Shipping promotion</strong>, não configuração do método."
+  },
+  {
+   "t": "11",
+   "q": "Banner diferente por categoria",
+   "a": "slot com <code>context=&quot;category&quot;</code> e <code>context-object</code>."
+  },
+  {
+   "t": "11",
+   "q": "Mesmo banner em todas as páginas",
+   "a": "<code>context=&quot;global&quot;</code>."
+  },
+  {
+   "t": "11",
+   "q": "Slot não aparece em Content Slots no BM",
+   "a": "o dev não declarou o <code>&lt;isslot&gt;</code> num template ativo / cartridge fora do path."
+  },
+  {
+   "t": "11",
+   "q": "Config agendada não aparece no horário",
+   "a": "cache da página; ou config não <strong>enabled</strong>; ou campanha inativa/customer group."
+  },
+  {
+   "t": "04",
+   "q": "Atributo novo não é encontrado na busca",
+   "a": "adicionar em <strong>Searchable Attributes</strong> <strong>e</strong> reconstruir o <strong>índice</strong>."
+  },
+  {
+   "t": "04",
+   "q": "Filtro por marca em todas as categorias",
+   "a": "refinement na <strong>root</strong> (herança)."
+  },
+  {
+   "t": "04",
+   "q": "Clientes buscam 'notebook' e 'laptop'",
+   "a": "<strong>Synonyms</strong>."
+  },
+  {
+   "t": "04",
+   "q": "Busca por 'frete' deve abrir a página de frete",
+   "a": "<strong>Search Redirect</strong>."
+  },
+  {
+   "t": "04",
+   "q": "Ordenar por mais vendidos",
+   "a": "Sorting Rule com <strong>Active Data</strong> + Sorting Option."
+  },
+  {
+   "t": "04",
+   "q": "Ignorar 'de', 'para'",
+   "a": "<strong>Stop Words</strong>."
+  },
+  {
+   "t": "13",
+   "q": "Atributo criado mas o merchandiser não vê no BM",
+   "a": "falta adicionar ao <strong>Attribute Group</strong>."
+  },
+  {
+   "t": "13",
+   "q": "Dados de formulário de contato de visitantes, sem conta",
+   "a": "<strong>Custom Object</strong>, <strong>Site</strong> scope, <strong>não replicável</strong>, com <strong>retention</strong>."
+  },
+  {
+   "t": "14",
+   "q": "Configuração por site (limite de frete grátis)",
+   "a": "<strong>Site Preference</strong>."
+  },
+  {
+   "t": "13",
+   "q": "Tabela compartilhada por todos os sites",
+   "a": "Custom Object com <strong>Organization</strong> scope."
+  },
+  {
+   "t": "21",
+   "q": "Mensagens <code>info</code> não aparecem no arquivo",
+   "a": "habilitar o nível em <strong>Custom Log Settings</strong> (root ou categoria)."
+  },
+  {
+   "t": "21",
+   "q": "Separar logs da integração X em arquivo próprio",
+   "a": "<code>Logger.getLogger('integrationx', 'categoria')</code> (o <strong>prefixo</strong> define o arquivo)."
+  },
+  {
+   "t": "21",
+   "q": "Onde investigar erros de várias instâncias juntas?",
+   "a": "<strong>Log Center</strong>."
+  },
+  {
+   "t": "21",
+   "q": "Página lenta, qual ferramenta mostra o tempo por controller e include?",
+   "a": "<strong>Pipeline Profiler</strong>."
+  },
+  {
+   "t": "21",
+   "q": "Qual função do script consome tempo?",
+   "a": "<strong>Code Profiler</strong>."
+  },
+  {
+   "t": "21",
+   "q": "Ver quais partes da página estão em cache",
+   "a": "<strong>Storefront Toolkit → Cache Information</strong>."
+  },
+  {
+   "t": "20",
+   "q": "Mini-cart mostra carrinho de outro cliente",
+   "a": "mini-cart estava dentro de parte cacheada: mover para <strong>remote include</strong> sem cache."
+  },
+  {
+   "t": "20",
+   "q": "Preço VIP aparece errado para alguns clientes com cache",
+   "a": "usar <code>varyby=&quot;price_promotion&quot;</code> / <code>res.personalized = true</code>."
+  },
+  {
+   "t": "20",
+   "q": "Mudança no template não aparece",
+   "a": "cache: invalidar em <code>Manage Sites &gt; Cache</code>."
+  },
+  {
+   "t": "17",
+   "q": "App recebe 401 <code>UnauthorizedException</code> em /baskets com client ID correto",
+   "a": "Recurso, método ou versão não liberados para o <code>client_id</code> nos <strong>OCAPI Settings</strong> (ou contexto errado: site × global)."
+  },
+  {
+   "t": "17",
+   "q": "Integração de back-office atualiza produtos",
+   "a": "<strong>Data API</strong> (não Shop)."
+  },
+  {
+   "t": "17",
+   "q": "App do comprador",
+   "a": "<strong>Shop API</strong>."
+  },
+  {
+   "t": "17",
+   "q": "Atributo custom não vem no JSON",
+   "a": "falta em <code>read_attributes</code>; lembrar do prefixo <code>c_</code>."
+  },
+  {
+   "t": "17",
+   "q": "Reduzir carga de GET de produtos",
+   "a": "<code>cache_time</code> no recurso."
+  },
+  {
+   "t": "19",
+   "q": "Mudar URL do serviço entre sandbox e produção sem deploy",
+   "a": "<strong>Service Credential</strong>."
+  },
+  {
+   "t": "19",
+   "q": "Evitar que a loja fique lenta quando o parceiro cai",
+   "a": "<strong>timeout</strong> baixo + <strong>circuit breaker</strong> no <strong>Profile</strong>."
+  },
+  {
+   "t": "19",
+   "q": "Testar sem o sistema externo disponível",
+   "a": "Service Mode <strong>Mocked</strong> + <code>mockCall</code>."
+  },
+  {
+   "t": "19",
+   "q": "Limitar chamadas por segundo exigido pelo parceiro",
+   "a": "<strong>Rate limiting</strong> no Profile."
+  },
+  {
+   "t": "19",
+   "q": "Esconder dados sensíveis no communication log",
+   "a": "callback <code>filterLogMessage</code> (Módulo 5)."
+  },
+  {
+   "t": "08",
+   "q": "Gravar no fim da chain",
+   "a": "<code>this.on('route:BeforeComplete')</code>"
+  },
+  {
+   "t": "10",
+   "q": "Layout",
+   "a": "<code>isdecorate</code> + <code>isreplace</code>"
+  },
+  {
+   "t": "10",
+   "q": "Custom tag",
+   "a": "<code>ismodule</code> em <code>modules.isml</code>"
+  },
+  {
+   "t": "06",
+   "q": "Adicionar dado à PDP sem mudar a base",
+   "a": "<code>server.extend(module.superModule)</code> + <code>server.append('Show', ...)</code> + <code>res.setViewData</code>."
+  },
+  {
+   "t": "06",
+   "q": "Validar algo antes da lógica da base",
+   "a": "<code>server.prepend</code>."
+  },
+  {
+   "t": "08",
+   "q": "Rota customizada não responde",
+   "a": "faltou <code>module.exports = server.exports()</code>, <code>next()</code>, ou cartridge fora do path."
+  },
+  {
+   "t": "08",
+   "q": "Rota que só deve ser usada como remote include",
+   "a": "<code>server.middleware.include</code>."
+  },
+  {
+   "t": "08",
+   "q": "Página de conta exige login",
+   "a": "<code>userLoggedIn.validateLoggedIn</code>."
+  },
+  {
+   "t": "06",
+   "q": "Adicionar um campo ao JSON de produto do SFRA",
+   "a": "criar <strong>decorator</strong> + estender <code>fullProduct</code> (ou o model relevante) usando <code>module.superModule</code>."
+  },
+  {
+   "t": "06",
+   "q": "Propriedade adicionada não aparece no JSON",
+   "a": "falta <code>enumerable: true</code>."
+  },
+  {
+   "t": "06",
+   "q": "Onde colocar lógica reutilizável entre vários controllers?",
+   "a": "<strong>helper</strong> em <code>scripts/helpers</code>."
+  },
+  {
+   "t": "06",
+   "q": "Quem escolhe o model certo para set/bundle/variante?",
+   "a": "<strong>factory</strong> (<code>ProductFactory</code>)."
+  },
+  {
+   "t": "20",
+   "q": "Página cacheada precisa mostrar mini-cart correto",
+   "a": "<strong>remote include</strong> (<code>&lt;isinclude url&gt;</code>) com rota <strong>sem cache</strong>."
+  },
+  {
+   "t": "10",
+   "q": "Fragmento reutilizável que compartilha pdict",
+   "a": "<strong>local include</strong> (<code>&lt;isinclude template&gt;</code>)."
+  },
+  {
+   "t": "10",
+   "q": "Remote include não recebe a variável do pdict",
+   "a": "remote include <strong>não</strong> compartilha pdict; passe parâmetros na URL."
+  },
+  {
+   "t": "10",
+   "q": "Tag que imprime HTML do merchandiser",
+   "a": "<code>&lt;isprint ... encoding=&quot;off&quot;/&gt;</code> (somente conteúdo confiável)."
+  },
+  {
+   "t": "10",
+   "q": "Valor dentro de atributo HTML",
+   "a": "<code>encoding=&quot;htmldoublequote&quot;</code> (ou <code>${}</code> que já faz encoding HTML)."
+  },
+  {
+   "t": "12",
+   "q": "Garantir que o formulário foi enviado pela própria loja",
+   "a": "<code>csrfProtection.generateToken</code> (GET) + <code>validateRequest</code> (POST) ou <code>validateAjaxRequest</code> (AJAX) + hidden input com <code>pdict.csrf.tokenName/token</code>."
+  },
+  {
+   "t": "12",
+   "q": "Validação de formato de e-mail sem JS",
+   "a": "atributo <code>regexp</code> no XML."
+  },
+  {
+   "t": "12",
+   "q": "Campo obrigatório",
+   "a": "<code>mandatory=&quot;true&quot;</code> + <code>missing-error</code>."
+  },
+  {
+   "t": "12",
+   "q": "Copiar valores do form para o objeto",
+   "a": "<code>binding</code> + <code>copyFrom</code>/<code>toObject</code> (ou atribuição explícita em transação)."
+  },
+  {
+   "t": "12",
+   "q": "Nome do input no HTML",
+   "a": "<code>dwfrm_&lt;form&gt;_&lt;campo&gt;</code> (via <code>htmlName</code>)."
+  },
+  {
+   "t": "10",
+   "q": "Texto com valor dinâmico",
+   "a": "<code>Resource.msgf</code> com <code>{0}</code>."
+  },
+  {
+   "t": "10",
+   "q": "Chave existe só no default, cliente está em pt_BR",
+   "a": "fallback mostra o default."
+  },
+  {
+   "t": "12",
+   "q": "Label de form traduzido",
+   "a": "chave no XML (<code>label=&quot;...&quot;</code>) + <code>forms_&lt;locale&gt;.properties</code>."
+  },
+  {
+   "t": "10",
+   "q": "Imagem diferente por país",
+   "a": "<code>static/&lt;locale&gt;/</code> + <code>URLUtils.staticURL</code>."
+  },
+  {
+   "t": "14",
+   "q": "Nome do produto em espanhol",
+   "a": "atributo <strong>localizável</strong> + valor no locale (BM ou XML <code>xml:lang</code>)."
+  },
+  {
+   "t": "14",
+   "q": "Locale não aparece na loja",
+   "a": "ativar em <code>Global Preferences &gt; Locales</code> <strong>e</strong> em <code>Site Preferences &gt; Locales</code>."
+  },
+  {
+   "t": "15",
+   "q": "Inspecionar variáveis passo a passo na sandbox",
+   "a": "<strong>Script Debugger</strong> (VS Code)."
+  },
+  {
+   "t": "21",
+   "q": "Erro só acontece em Production",
+   "a": "<strong>Logs</strong> (custom e error) e <strong>Log Center</strong>; compare preferências e configuração por instância."
+  },
+  {
+   "t": "21",
+   "q": "Quais mensagens de log a requisição gerou?",
+   "a": "Storefront Toolkit <strong>Request Log</strong>."
+  },
+  {
+   "t": "21",
+   "q": "Exceção não tratada",
+   "a": "arquivo <strong><code>error-*.log</code></strong>."
+  },
+  {
+   "t": "19",
+   "q": "<code>mockCall</code> vs <code>mockFull</code>",
+   "a": "parcial (mantém create/parse) vs total"
+  },
+  {
+   "t": "07",
+   "q": "Registrar hook",
+   "a": "<code>package.json</code> → <code>hooks.json</code> → script com função do momento"
+  },
+  {
+   "t": "17",
+   "q": "Erro em hook OCAPI",
+   "a": "<code>return new Status(Status.ERROR, ...)</code>"
+  },
+  {
+   "t": "07",
+   "q": "Chamar hook",
+   "a": "<code>HookMgr.callHook(nome, função, args)</code>"
+  },
+  {
+   "t": "18",
+   "q": "Fim da leitura no chunk",
+   "a": "<code>read()</code> retorna <code>undefined</code>"
+  },
+  {
+   "t": "09",
+   "q": "Escrever no banco",
+   "a": "<code>Transaction.wrap</code>"
+  },
+  {
+   "t": "09",
+   "q": "Iterator",
+   "a": "sempre <code>close()</code>"
+  },
+  {
+   "t": "11",
+   "q": "Quais arquivos compõem um component type?",
+   "a": "<code>.json</code> (meta definition) + <code>.js</code> (render) + <code>.isml</code> (template), em <code>experience/components/&lt;grupo&gt;/</code> e <code>templates/default/experience/components/&lt;grupo&gt;/</code>."
+  },
+  {
+   "t": "11",
+   "q": "Onde se definem as áreas que aceitam componentes?",
+   "a": "<code>region_definitions</code>."
+  },
+  {
+   "t": "11",
+   "q": "Onde se definem campos editáveis?",
+   "a": "<code>attribute_definition_groups</code> → <code>attribute_definitions</code>."
+  },
+  {
+   "t": "11",
+   "q": "Componente não aparece no editor",
+   "a": "cartridge fora do path, JSON inválido, ou grupo/ID errado."
+  },
+  {
+   "t": "11",
+   "q": "Restringir componentes numa region",
+   "a": "<code>component_type_inclusions</code> / <code>component_type_exclusions</code>."
+  },
+  {
+   "t": "19",
+   "q": "Onde definir a URL",
+   "a": "Credential (lida no <code>createRequest</code> via <code>svc.getConfiguration().getCredential()</code>), e não no código."
+  },
+  {
+   "t": "19",
+   "q": "Serviço retorna <code>SERVICE_UNAVAILABLE</code> sem chamar o externo",
+   "a": "circuit breaker aberto, rate limit, ou serviço <strong>desabilitado</strong>."
+  },
+  {
+   "t": "07",
+   "q": "Hook não é executado",
+   "a": "falta <code>hooks</code> no <code>package.json</code>, caminho errado no <code>hooks.json</code>, nome do extension point errado, função exportada com nome errado, ou cartridge fora do path."
+  },
+  {
+   "t": "17",
+   "q": "Bloquear criação de pedido OCAPI se regra falhar",
+   "a": "<code>dw.ocapi.shop.order.beforePOST</code> retornando <code>Status.ERROR</code>."
+  },
+  {
+   "t": "17",
+   "q": "Adicionar campo calculado ao JSON",
+   "a": "<code>modify&lt;METHOD&gt;Response</code>."
+  },
+  {
+   "t": "03",
+   "q": "Recalcular cesta com regra de frete customizada",
+   "a": "<code>dw.order.calculate</code> (ou <code>calculateShipping</code>)."
+  },
+  {
+   "t": "07",
+   "q": "Plugin injeta script no <code>&lt;head&gt;</code> sem sobrescrever templates",
+   "a": "<code>app.template.htmlHead</code>."
+  },
+  {
+   "t": "19",
+   "q": "Sincronizar grande volume de catálogo",
+   "a": "arquivo + job de import (assíncrono), não chamadas unitárias."
+  },
+  {
+   "t": "17",
+   "q": "OCAPI responde 401: o que verificar?",
+   "a": "Token ausente ou expirado, client ID desconhecido, ou falta de permissão nos <strong>OCAPI Settings</strong> (<code>UnauthorizedException</code>)."
+  },
+  {
+   "t": "17",
+   "q": "Atributo custom no JSON",
+   "a": "prefixo <code>c_</code> + <code>read_attributes</code>/<code>write_attributes</code>."
+  },
+  {
+   "t": "18",
+   "q": "Disparar job a partir de sistema externo",
+   "a": "Data API <code>POST /jobs/{job_id}/executions</code>."
+  },
+  {
+   "t": "18",
+   "q": "Processar milhares de registros com progresso e baixo uso de memória",
+   "a": "<strong>chunk-oriented</strong>."
+  },
+  {
+   "t": "18",
+   "q": "Tarefa única (mover arquivo, chamar API)",
+   "a": "<strong>task-oriented</strong> (<code>script-module-step</code> com <code>function</code>)."
+  },
+  {
+   "t": "18",
+   "q": "Step custom não aparece no BM",
+   "a": "<code>steptypes.json</code> fora da <strong>raiz</strong> da cartridge, JSON inválido, ou cartridge fora do path do contexto (site vs <strong>BM</strong> para organização)."
+  },
+  {
+   "t": "21",
+   "q": "Habilitar debug só para uma parte do código",
+   "a": "categoria + Custom Log Settings."
+  },
+  {
+   "t": "21",
+   "q": "O que é aceitável logar?",
+   "a": "IDs técnicos (orderNo, productID), status, códigos de erro. <strong>Nunca</strong> PCI (cartão/CVV) ou PII desnecessário."
+  },
+  {
+   "t": "01",
+   "q": "O que é um realm?",
+   "a": "O conjunto de instâncias de um cliente: um PIG (Production, Staging, Development) e um SIG (sandboxes)."
+  },
+  {
+   "t": "01",
+   "q": "POD",
+   "a": "Infraestrutura compartilhada de data center onde os realms rodam."
+  },
+  {
+   "t": "01",
+   "q": "Para que serve Staging?",
+   "a": "Fonte de dados e código: é onde se edita e de onde se replica para Development e Production."
+  },
+  {
+   "t": "01",
+   "q": "Motor de script do servidor",
+   "a": "O B2C Commerce executa JavaScript server-side (CommonJS, <code>dw.*</code>); Node.js é só tooling local."
+  },
+  {
+   "t": "04",
+   "q": "Onde fica o JS/SCSS de cliente no SFRA?",
+   "a": "<code>cartridge/client/default/js|scss</code>, compilados para <code>cartridge/static</code> pelo build."
+  },
+  {
+   "t": "04",
+   "q": "Quem resolve <code>*/cartridge/...</code>?",
+   "a": "O cartridge path: procura o arquivo da esquerda para a direita."
+  },
+  {
+   "t": "05",
+   "q": "Repositórios do SFRA ao instalar",
+   "a": "Clonar <code>storefront-reference-architecture</code> e plugins lado a lado, na mesma tag."
+  },
+  {
+   "t": "05",
+   "q": "Dados de exemplo do RefArch",
+   "a": "Importar o site archive de <code>storefront-data</code> via Site Import & Export (ou CLI)."
+  },
+  {
+   "t": "09",
+   "q": "Escrita persistente no storefront",
+   "a": "Sempre dentro de <code>Transaction.wrap()</code>; objetos replicáveis são somente leitura."
+  },
+  {
+   "t": "09",
+   "q": "Limite de elementos em coleções",
+   "a": "20.000 (<code>api.dw.util.collectionSize</code>, aviso em 12.000)."
+  },
+  {
+   "t": "13",
+   "q": "Custom object escrito pelo storefront",
+   "a": "Tipo <strong>não replicável</strong> (<code>no-staging</code>); <code>createCustomObject</code> até 10 por requisição."
+  },
+  {
+   "t": "14",
+   "q": "Code version: o que ativar após deploy?",
+   "a": "A versão em <em>Administration › Site Development › Code Deployment</em>; um deploy novo por versão facilita rollback."
+  },
+  {
+   "t": "15",
+   "q": "<code>dw.json</code>",
+   "a": "Configura host, usuário/credenciais e code version para upload; nunca vai para o Git."
+  },
+  {
+   "t": "16",
+   "q": "Papel do Node.js num projeto SFRA",
+   "a": "Gerenciar dependências npm e ferramentas: build, lint, testes, upload."
+  },
+  {
+   "t": "16",
+   "q": "Teste unitário de script com <code>dw/*</code>",
+   "a": "mocha + chai + sinon + <strong>proxyquire</strong> para mockar os <code>require</code>."
+  },
+  {
+   "t": "16",
+   "q": "Controllers × models × views: tipo de teste",
+   "a": "Models/helpers: unitários; controllers: integração; views: funcionais."
+  },
+  {
+   "t": "17",
+   "q": "Status atual da OCAPI",
+   "a": "Deprecated desde abril de 2026; projetos novos devem usar <strong>SCAPI</strong> com SLAS."
+  },
+  {
+   "t": "17",
+   "q": "Os hooks <code>dw.ocapi.shop.*</code> rodam na SCAPI?",
+   "a": "Sim: são os mesmos extension points (com a feature switch de hooks habilitada)."
+  },
+  {
+   "t": "17",
+   "q": "PUT × PATCH na OCAPI",
+   "a": "PUT cria ou substitui (limpa o ausente); PATCH atualiza só o enviado e não cria."
+  },
+  {
+   "t": "17",
+   "q": "<code>modifyGETResponse</code> que grava no banco",
+   "a": "Gera <code>ORMTransactionException</code>/500: modifyResponse e GET não têm transação."
+  },
+  {
+   "t": "17",
+   "q": "Circuit breaker de hooks OCAPI",
+   "a": "Mais de 50 falhas nas últimas 100 chamadas abre por 60 s (503 <code>HookCircuitBreakerException</code>)."
+  },
+  {
+   "t": "17",
+   "q": "Custom API: quando fica disponível?",
+   "a": "Ao <strong>ativar</strong> a code version que a contém (registro dos endpoints)."
+  },
+  {
+   "t": "17",
+   "q": "Token SLAS: validade",
+   "a": "Access token 30 min; refresh 90 dias (registrado) ou 30 (guest) em produção."
+  },
+  {
+   "t": "18",
+   "q": "Exit status custom num step task",
+   "a": "<code>new Status(Status.OK, 'NO_FILES_FOUND')</code>; códigos custom só valem para status não-erro."
+  },
+  {
+   "t": "18",
+   "q": "Jobs agendados em sandbox",
+   "a": "Não são suportados: use Run Now, a API ou o b2c CLI."
+  },
+  {
+   "t": "18",
+   "q": "REPLACE em price book",
+   "a": "Substitui o price book inteiro: preços ausentes no feed são removidos."
+  },
+  {
+   "t": "18",
+   "q": "Active Data import",
+   "a": "Sempre em REPLACE: atributos fora do CSV são perdidos."
+  },
+  {
+   "t": "19",
+   "q": "Status de <code>dw.svc.Result</code>",
+   "a": "<code>OK</code>, <code>ERROR</code> e <code>SERVICE_UNAVAILABLE</code> (com <code>unavailableReason</code>)."
+  },
+  {
+   "t": "19",
+   "q": "HTTP 4xx abre o circuit breaker?",
+   "a": "Não: só falhas de conexão, timeout, 5xx e exceções no callback contam."
+  },
+  {
+   "t": "19",
+   "q": "Quota de HTTPClient no storefront",
+   "a": "16 chamadas por página (aviso a partir de 10)."
+  },
+  {
+   "t": "19",
+   "q": "Comm log em produção",
+   "a": "Só é gravado com callback de filtro (<code>filterLogMessage</code> ou getters de log)."
+  },
+  {
+   "t": "20",
+   "q": "Custom cache: onde se define?",
+   "a": "<code>caches.json</code> referenciado em <code>\"caches\"</code> no <code>package.json</code> do cartridge."
+  },
+  {
+   "t": "20",
+   "q": "Limites do custom cache",
+   "a": "~20 MB por app server, até 100 caches, entradas de até 128 KB; não sincroniza entre app servers."
+  },
+  {
+   "t": "20",
+   "q": "<code>&lt;iscache status=\"off\"/&gt;</code>",
+   "a": "Deprecated: para não cachear, omita o <code>iscache</code> ou use o atributo <code>if</code>."
+  },
+  {
+   "t": "20",
+   "q": "Middleware de cache da PDP no SFRA",
+   "a": "<code>cache.applyPromotionSensitiveCache</code> (24 h, personalizado por preço/promoção)."
+  },
+  {
+   "t": "20",
+   "q": "Listagem sem varrer o banco",
+   "a": "<code>ProductSearchModel</code> e <code>ProductSearchHit</code> em vez de <code>Category.getProducts()</code>/<code>getVariants()</code>."
+  },
+  {
+   "t": "20",
+   "q": "Remote includes por página",
+   "a": "No máximo ~20, com profundidade de 3 a 7 (checklist oficial); cada <code>isslot</code> usa 2."
+  },
+  {
+   "t": "21",
+   "q": "Limite diário dos logs custom",
+   "a": "10 MB por arquivo, por app server, por dia; depois suspende até 00:00 GMT."
+  },
+  {
+   "t": "21",
+   "q": "Retenção de logs em PRD/STG",
+   "a": "30 dias (segurança: 90); após 3 dias vão para <code>log_archive</code>."
+  },
+  {
+   "t": "21",
+   "q": "Qual template/controller gerou isto?",
+   "a": "Storefront Toolkit › <strong>Page Info</strong>."
+  },
+  {
+   "t": "21",
+   "q": "Quota enforced excedida",
+   "a": "Lança exceção e interrompe a operação; não capture: redesenhe. Só o Support suaviza em PRD."
+  },
+  {
+   "t": "22",
+   "q": "Fit-gap: primeira regra",
+   "a": "Configurar antes de customizar; gaps em cartridges próprios, nunca no base."
+  },
+  {
+   "t": "22",
+   "q": "Form com CSRF numa página cacheada",
+   "a": "Renderizar o form num <strong>remote include sem cache</strong> que gera o token."
+  },
+  {
+   "t": "22",
+   "q": "O que não é replicado no go-live?",
+   "a": "Credenciais de serviço, chaves/certificados, valores de preferência por instância, clients de API, hostnames."
+  }
+ ],
+ "questions": [
+  {
+   "t": "01",
+   "d": "setup",
+   "q": "Um merchandiser precisa alterar a descrição de 200 produtos para a próxima campanha. Onde deve editar?",
+   "o": [
+    "Production, para efeito imediato",
+    "Staging, e depois replicar",
+    "Development, e depois replicar",
+    "Na sandbox, e exportar para Production"
+   ],
+   "a": 1,
+   "e": "Staging é a fonte de dados replicáveis; edições em Production são sobrescritas na próxima replicação."
+  },
+  {
+   "t": "07",
+   "d": "setup",
+   "q": "O cartridge path do site é <code>app_custom:plugin_wishlists:app_storefront_base</code>. Qual cartridge vence se as três tiverem <code>templates/default/home.isml</code>?",
+   "o": [
+    "<code>app_storefront_base</code>",
+    "<code>plugin_wishlists</code>",
+    "<code>app_custom</code>",
+    "O build falha por conflito"
+   ],
+   "a": 2,
+   "e": "A resolução é da esquerda para a direita; o primeiro arquivo encontrado vence."
+  },
+  {
+   "t": "15",
+   "d": "setup",
+   "q": "O dev fez upload por WebDAV, mas o storefront não mudou. Qual a causa mais provável?",
+   "o": [
+    "A code version usada no upload não está ativa",
+    "Falta reconstruir o search index",
+    "O site está em Gross taxation",
+    "A sandbox não recebe replicação"
+   ],
+   "a": 0,
+   "e": "O <code>version</code> do <code>dw.json</code> precisa ser a code version ativa (ou ser ativada em Code Deployment)."
+  },
+  {
+   "t": "18",
+   "d": "setup",
+   "q": "Qual modo de import cria registros novos e atualiza os existentes?",
+   "o": [
+    "UPDATE",
+    "REPLACE",
+    "MERGE",
+    "DELETE"
+   ],
+   "a": 2,
+   "e": "MERGE cria e atualiza. UPDATE só atualiza existentes; REPLACE apaga e recria."
+  },
+  {
+   "t": "14",
+   "d": "setup",
+   "q": "Depois de criar o site, o negócio quer trocar a moeda padrão. O que acontece?",
+   "o": [
+    "Basta mudar em Site Preferences",
+    "Não é possível: a default currency é fixa na criação",
+    "Muda via import de site",
+    "Muda via OCAPI Data"
+   ],
+   "a": 1,
+   "e": "A default currency não pode ser alterada; moedas adicionais podem ser ativadas."
+  },
+  {
+   "t": "02",
+   "d": "site",
+   "q": "O cliente quer vender um &quot;look&quot; onde o comprador escolhe só algumas peças. Qual tipo de produto?",
+   "o": [
+    "Bundle",
+    "Product Set",
+    "Variation Group",
+    "Option Product"
+   ],
+   "a": 1,
+   "e": "Product Set agrupa itens comprados individualmente; Bundle é vendido junto com preço único."
+  },
+  {
+   "t": "02",
+   "d": "site",
+   "q": "Há dois preços válidos para o mesmo produto, em price books diferentes atribuídos ao site. Qual é exibido?",
+   "o": [
+    "O do price book criado primeiro",
+    "O maior",
+    "O menor",
+    "O do price book pai"
+   ],
+   "a": 2,
+   "e": "Com vários preços aplicáveis, vence o menor."
+  },
+  {
+   "t": "03",
+   "d": "site",
+   "q": "Frete grátis para pedidos acima de R$200. Onde configurar?",
+   "o": [
+    "No shipping method, campo de custo",
+    "Numa shipping promotion",
+    "Num hook <code>dw.order.calculateShipping</code>",
+    "Em Site Preferences"
+   ],
+   "a": 1,
+   "e": "Regras condicionais de desconto de frete são promoções, não configuração do método."
+  },
+  {
+   "t": "11",
+   "d": "site",
+   "q": "Qual NÃO é um tipo de conteúdo de content slot?",
+   "o": [
+    "Products",
+    "Categories",
+    "Content Assets",
+    "Promotions"
+   ],
+   "a": 3,
+   "e": "Slots aceitam Products, Categories, Content Assets, HTML e Recommendations."
+  },
+  {
+   "t": "04",
+   "d": "data",
+   "q": "Um atributo novo de produto não é encontrado pela busca. Quais dois passos resolvem?",
+   "o": [
+    "Adicionar a Searchable Attributes e reconstruir o índice",
+    "Adicionar a um Attribute Group e invalidar o cache",
+    "Criar um synonym e um redirect",
+    "Marcar como localizable e replicar"
+   ],
+   "a": 0,
+   "e": "Busca depende de atributos pesquisáveis e de um índice atualizado."
+  },
+  {
+   "t": "04",
+   "d": "data",
+   "q": "Clientes buscam &quot;notebook&quot; e &quot;laptop&quot; e esperam o mesmo resultado. O que configurar?",
+   "o": [
+    "Stop Words",
+    "Search Redirect",
+    "Synonyms",
+    "Sorting Rule"
+   ],
+   "a": 2,
+   "e": "Synonyms (Search Dictionaries) tratam termos equivalentes."
+  },
+  {
+   "t": "13",
+   "d": "data",
+   "q": "Guardar mensagens de &quot;fale conosco&quot; de visitantes sem conta, geradas em Production. Melhor opção?",
+   "o": [
+    "System object Customer com atributo novo",
+    "Custom Object site-scoped, não replicável, com retenção",
+    "Site Preference",
+    "Content Asset"
+   ],
+   "a": 1,
+   "e": "Dados gerados em PRD não podem ser replicáveis; a retenção evita estourar quotas."
+  },
+  {
+   "t": "21",
+   "d": "data",
+   "q": "Mensagens <code>Logger.info</code> não aparecem no arquivo de log. Por quê?",
+   "o": [
+    "<code>info</code> é bloqueado em sandbox",
+    "O nível não foi habilitado em Custom Log Settings",
+    "Falta <code>Transaction.wrap</code>",
+    "O Log Center está desligado"
+   ],
+   "a": 1,
+   "e": "Por padrão só WARN, ERROR e FATAL vão para arquivo; info e debug precisam ser habilitados por categoria (Log to File)."
+  },
+  {
+   "t": "21",
+   "d": "data",
+   "q": "Qual ferramenta mostra o tempo gasto por controller e por include?",
+   "o": [
+    "Code Profiler",
+    "Pipeline Profiler",
+    "Request Log",
+    "Quota Status"
+   ],
+   "a": 1,
+   "e": "Pipeline Profiler mede controllers/includes; Code Profiler mede funções de script."
+  },
+  {
+   "t": "20",
+   "d": "data",
+   "q": "O mini-cart mostra o carrinho de outro cliente numa página cacheada. Correção?",
+   "o": [
+    "Desligar o cache da página inteira",
+    "Mover o mini-cart para um remote include sem cache",
+    "Usar <code>&lt;isinclude template&gt;</code>",
+    "Aumentar o TTL"
+   ],
+   "a": 1,
+   "e": "Remote include é uma requisição separada com cache próprio; mantém a página cacheada."
+  },
+  {
+   "t": "17",
+   "d": "data",
+   "q": "Um app mobile recebe 401 <code>UnauthorizedException</code> ao chamar <code>/baskets</code> na Shop API, com client ID correto e JWT recém-emitido. Onde está o problema?",
+   "o": [
+    "O client ID não existe no Account Manager",
+    "OCAPI Settings: recurso ou método não liberado para o <code>client_id</code> no site",
+    "Falta hook <code>beforePOST</code>",
+    "Cartridge path do BM"
+   ],
+   "a": 1,
+   "e": "Por padrão nenhum recurso é permitido. Sem permissão nos Settings a OCAPI responde 401 <code>UnauthorizedException</code>; client ID desconhecido daria <code>UnknownClientIdException</code>."
+  },
+  {
+   "t": "19",
+   "d": "data",
+   "q": "A URL de um serviço muda entre sandbox e produção. Onde configurar sem deploy?",
+   "o": [
+    "No código, com <code>System.getInstanceType()</code>",
+    "Na Service Credential",
+    "No Service Profile",
+    "Em Site Preferences"
+   ],
+   "a": 1,
+   "e": "Credential guarda URL e usuário/senha por instância; Profile guarda timeout, circuit breaker e rate limit."
+  },
+  {
+   "t": "06",
+   "d": "dev",
+   "q": "Adicionar um dado à PDP sem alterar a cartridge base. Qual combinação?",
+   "o": [
+    "<code>server.replace</code> + <code>res.render</code>",
+    "<code>server.extend(module.superModule)</code> + <code>server.append</code> + <code>res.setViewData</code>",
+    "Copiar <code>Product.js</code> para app_custom",
+    "<code>server.prepend</code> + <code>res.json</code>"
+   ],
+   "a": 1,
+   "e": "Extend herda as rotas; append roda depois da base e acrescenta à view data."
+  },
+  {
+   "t": "08",
+   "d": "dev",
+   "q": "Uma rota nova dá 404. O que é obrigatório no fim do controller?",
+   "o": [
+    "<code>return next();</code>",
+    "<code>module.exports = server.exports();</code>",
+    "<code>server.render()</code>",
+    "<code>exports.Start = guard.ensure()</code>"
+   ],
+   "a": 1,
+   "e": "Sem <code>server.exports()</code> as rotas não são registradas."
+  },
+  {
+   "t": "08",
+   "d": "dev",
+   "q": "Uma rota deve ser chamada apenas como remote include. Qual middleware usar?",
+   "o": [
+    "<code>server.middleware.https</code>",
+    "<code>server.middleware.include</code>",
+    "<code>csrfProtection.generateToken</code>",
+    "<code>cache.applyDefaultCache</code>"
+   ],
+   "a": 1,
+   "e": "<code>server.middleware.include</code> recusa chamadas diretas."
+  },
+  {
+   "t": "06",
+   "d": "dev",
+   "q": "Uma propriedade criada num decorator não aparece no JSON do model. Por quê?",
+   "o": [
+    "Falta <code>writable: true</code>",
+    "Falta <code>enumerable: true</code>",
+    "Faltou <code>Transaction.wrap</code>",
+    "Models não aceitam decorators"
+   ],
+   "a": 1,
+   "e": "Propriedades não enumeráveis não são serializadas."
+  },
+  {
+   "t": "10",
+   "d": "dev",
+   "q": "Qual afirmação sobre <code>&lt;isinclude url&gt;</code> está correta?",
+   "o": [
+    "Compartilha o pdict com o template pai",
+    "É uma requisição separada; parâmetros vão na URL",
+    "Não pode ter cache próprio",
+    "É o mesmo que <code>&lt;isdecorate&gt;</code>"
+   ],
+   "a": 1,
+   "e": "Remote includes não veem o pdict do pai."
+  },
+  {
+   "t": "20",
+   "d": "dev",
+   "q": "Qual é o único valor válido de <code>varyby</code> em <code>&lt;iscache&gt;</code>?",
+   "o": [
+    "<code>customer</code>",
+    "<code>session</code>",
+    "<code>price_promotion</code>",
+    "<code>locale</code>"
+   ],
+   "a": 2,
+   "e": "<code>varyby=&quot;price_promotion&quot;</code> varia o cache por price books e promoções do cliente."
+  },
+  {
+   "t": "12",
+   "d": "dev",
+   "q": "Validar CSRF numa chamada AJAX e devolver JSON em caso de falha:",
+   "o": [
+    "<code>csrfProtection.validateRequest</code>",
+    "<code>csrfProtection.validateAjaxRequest</code>",
+    "<code>csrfProtection.generateToken</code>",
+    "<code>server.middleware.https</code>"
+   ],
+   "a": 1,
+   "e": "Os dois deslogam o cliente quando o token falha; <code>validateRequest</code> redireciona para <code>CSRF-Fail</code> (página), <code>validateAjaxRequest</code> para <code>CSRF-AjaxFail</code> (JSON)."
+  },
+  {
+   "t": "10",
+   "d": "dev",
+   "q": "Texto traduzido com valor dinâmico (&quot;Olá, {0}&quot;):",
+   "o": [
+    "<code>Resource.msg</code>",
+    "<code>Resource.msgf</code>",
+    "<code>StringUtils.format</code>",
+    "<code>URLUtils.staticURL</code>"
+   ],
+   "a": 1,
+   "e": "<code>Resource.msgf(key, bundle, default, args...)</code> substitui <code>{0}</code>, <code>{1}</code>..."
+  },
+  {
+   "t": "11",
+   "d": "dev",
+   "q": "Quais arquivos compõem um component type do Page Designer?",
+   "o": [
+    "<code>.json</code> + <code>.js</code> + <code>.isml</code>",
+    "<code>.xml</code> + <code>.isml</code>",
+    "<code>.properties</code> + <code>.js</code>",
+    "<code>steptypes.json</code> + <code>.js</code>"
+   ],
+   "a": 0,
+   "e": "Meta definition (<code>.json</code>), script com <code>render</code> (<code>.js</code>) e template (<code>.isml</code>)."
+  },
+  {
+   "t": "19",
+   "d": "dev",
+   "q": "Testar uma integração sem o sistema externo disponível, mantendo <code>createRequest</code>/<code>parseResponse</code>:",
+   "o": [
+    "<code>mockFull</code>",
+    "<code>mockCall</code> com Service Mode Mocked",
+    "Desabilitar o serviço",
+    "Circuit breaker"
+   ],
+   "a": 1,
+   "e": "<code>mockCall</code> substitui só a chamada de rede; <code>mockFull</code> substitui todo o fluxo."
+  },
+  {
+   "t": "07",
+   "d": "dev",
+   "q": "Um hook não executa. Qual item NÃO é causa provável?",
+   "o": [
+    "<code>package.json</code> sem a entrada <code>hooks</code>",
+    "Nome do extension point errado",
+    "Cartridge fora do path",
+    "Site em Net taxation"
+   ],
+   "a": 3,
+   "e": "Taxação não interfere no registro de hooks."
+  },
+  {
+   "t": "07",
+   "d": "dev",
+   "q": "Ordem correta dos parâmetros de <code>HookMgr.callHook</code>:",
+   "o": [
+    "<code>(functionName, extensionPoint, args)</code>",
+    "<code>(extensionPoint, functionName, ...args)</code>",
+    "<code>(args, extensionPoint)</code>",
+    "<code>(cartridge, extensionPoint)</code>"
+   ],
+   "a": 1,
+   "e": "Primeiro o extension point, depois o nome da função e os argumentos."
+  },
+  {
+   "t": "18",
+   "d": "dev",
+   "q": "Processar 500 mil registros com progresso e pouca memória:",
+   "o": [
+    "Task-oriented com um loop",
+    "Chunk-oriented (<code>read</code>/<code>process</code>/<code>write</code>)",
+    "Controller com <code>queryAllSiteProducts</code>",
+    "OCAPI em lote a partir da loja"
+   ],
+   "a": 1,
+   "e": "Chunk-oriented lê, processa e grava em blocos com progresso; controle as transações com <code>Transaction.wrap</code> no <code>write</code>."
+  },
+  {
+   "t": "18",
+   "d": "dev",
+   "q": "Num step chunk-oriented, como <code>read()</code> sinaliza o fim dos dados?",
+   "o": [
+    "Retornando <code>null</code>",
+    "Retornando <code>undefined</code>",
+    "Lançando exceção",
+    "Retornando <code>Status.OK</code>"
+   ],
+   "a": 1,
+   "e": "<code>undefined</code> encerra a leitura; em <code>process</code>, <code>undefined</code> filtra o item."
+  },
+  {
+   "t": "21",
+   "d": "dev",
+   "q": "Criar logs de uma integração num arquivo próprio:",
+   "o": [
+    "<code>Logger.error(msg)</code>",
+    "<code>Logger.getLogger('integrationx', 'categoria')</code>",
+    "<code>console.log</code>",
+    "<code>dw.system.Log.write</code>"
+   ],
+   "a": 1,
+   "e": "O primeiro argumento é o prefixo do arquivo de log custom."
+  },
+  {
+   "t": "20",
+   "d": "dev",
+   "q": "Qual trecho viola best practices no storefront?",
+   "o": [
+    "<code>ProductSearchModel</code> com refinement indexado",
+    "<code>ProductMgr.queryAllSiteProducts()</code> num controller",
+    "<code>Transaction.wrap</code> numa escrita",
+    "Remote include para mini-cart"
+   ],
+   "a": 1,
+   "e": "<code>queryAllSiteProducts</code> cai na quota <code>queryAllProducts</code>, com limite 0 no storefront; é para jobs, sempre com <code>close()</code>."
+  },
+  {
+   "t": "18",
+   "d": "dev",
+   "q": "Disparar um job a partir de um sistema externo:",
+   "o": [
+    "Shop API <code>/jobs</code>",
+    "Data API <code>POST /jobs/{job_id}/executions</code>",
+    "WebDAV",
+    "Hook <code>dw.job.start</code>"
+   ],
+   "a": 1,
+   "e": "Jobs são recursos administrativos da Data API."
+  },
+  {
+   "t": "01",
+   "d": "setup",
+   "q": "Qual afirmação sobre as instâncias de um realm é correta?",
+   "o": [
+    "Sandboxes recebem replicação de Staging",
+    "Staging é onde se editam dados, que depois são replicados para Production",
+    "Production replica para Staging",
+    "Development é o único lugar com dados reais"
+   ],
+   "a": 1,
+   "e": "Staging é a fonte; a replicação vai para Development e Production."
+  },
+  {
+   "t": "01",
+   "d": "setup",
+   "q": "O que roda o código de servidor de um site SFRA?",
+   "o": [
+    "Node.js na instância",
+    "O motor de script JavaScript da plataforma (CommonJS, <code>dw.*</code>)",
+    "Java compilado",
+    "PHP"
+   ],
+   "a": 1,
+   "e": "Node.js só é usado localmente para tooling."
+  },
+  {
+   "t": "04",
+   "d": "dev",
+   "q": "Onde fica o SCSS de cliente de um cartridge SFRA antes do build?",
+   "o": [
+    "<code>cartridge/static/default/css</code>",
+    "<code>cartridge/client/default/scss</code>",
+    "<code>cartridge/templates/default/css</code>",
+    "<code>cartridge/scss</code>"
+   ],
+   "a": 1,
+   "e": "O build (sgmf-scripts) compila de <code>client/</code> para <code>static/</code>."
+  },
+  {
+   "t": "05",
+   "d": "setup",
+   "q": "Ao instalar o SFRA com plugins, como os repositórios devem ser organizados?",
+   "o": [
+    "Plugins dentro de <code>app_storefront_base</code>",
+    "Clonados lado a lado, na mesma versão/tag compatível",
+    "Só via npm",
+    "Num único zip"
+   ],
+   "a": 1,
+   "e": "Os caminhos relativos do build (<code>paths</code>) assumem repositórios irmãos."
+  },
+  {
+   "t": "09",
+   "d": "dev",
+   "q": "Um helper do storefront tenta <code>product.custom.x = 1</code> e falha. Causa mais provável?",
+   "o": [
+    "Falta <code>Transaction.wrap</code> ou o produto é somente leitura no storefront",
+    "Falta reindexar",
+    "Quota de HTTP",
+    "Cache"
+   ],
+   "a": 0,
+   "e": "Produtos são replicáveis e somente leitura no storefront; escritas permitidas exigem transação."
+  },
+  {
+   "t": "12",
+   "d": "dev",
+   "q": "Como o SFRA gera o nome HTML de um campo <code>email</code> do form <code>newsletter</code>?",
+   "o": [
+    "<code>newsletter.email</code>",
+    "<code>dwfrm_newsletter_email</code> (via <code>htmlName</code>)",
+    "<code>email</code>",
+    "<code>form[email]</code>"
+   ],
+   "a": 1,
+   "e": "Use sempre <code>field.htmlName</code> no ISML."
+  },
+  {
+   "t": "13",
+   "d": "data",
+   "q": "Um tipo de custom object deve ser editado em Staging e chegar a Production. Configuração?",
+   "o": [
+    "Não replicável",
+    "Replicável (staging-mode source-to-target)",
+    "Site preference",
+    "Atributo de sessão"
+   ],
+   "a": 1,
+   "e": "Dados de configuração editados em Staging são replicáveis; dados criados pelo comprador não."
+  },
+  {
+   "t": "14",
+   "d": "setup",
+   "q": "Uma preferência custom deve ter valores diferentes em Development e Production. O que usar?",
+   "o": [
+    "Constante no código",
+    "Site preference custom, com valor configurado por instância",
+    "Custom object",
+    "Cookie"
+   ],
+   "a": 1,
+   "e": "Preferências têm valores por instância (e blocos por tipo de instância no import)."
+  },
+  {
+   "t": "15",
+   "d": "setup",
+   "q": "Qual afirmação sobre o upload de código é correta?",
+   "o": [
+    "Production aceita upload para a code version ativa",
+    "Envie para uma code version e ative-a; em Production o upload na versão ativa é recusado",
+    "Código sobe pelo Site Import",
+    "O upload ativa automaticamente"
+   ],
+   "a": 1,
+   "e": "O fluxo seguro é uma versão nova por deploy, ativada depois."
+  },
+  {
+   "t": "16",
+   "d": "dev",
+   "q": "Qual combinação é usada nos testes unitários do SFRA?",
+   "o": [
+    "jest + puppeteer",
+    "mocha + chai + sinon + proxyquire",
+    "karma + jasmine",
+    "phpunit"
+   ],
+   "a": 1,
+   "e": "proxyquire substitui os <code>require('dw/...')</code> por mocks."
+  },
+  {
+   "t": "17",
+   "d": "dev",
+   "q": "Qual o equivalente moderno recomendado para a OCAPI Shop API num projeto novo?",
+   "o": [
+    "OCAPI Data API",
+    "SCAPI Shopper APIs com autenticação SLAS",
+    "WebDAV",
+    "SOAP"
+   ],
+   "a": 1,
+   "e": "A OCAPI foi marcada como deprecated em abril de 2026."
+  },
+  {
+   "t": "17",
+   "d": "dev",
+   "q": "Um hook <code>modifyGETResponse</code> grava num atributo do produto e a API passa a dar 500. Por quê?",
+   "o": [
+    "Falta <code>c_</code>",
+    "modifyResponse/GET não rodam em transação: escrita gera <code>ORMTransactionException</code>",
+    "Falta expand",
+    "Cache"
+   ],
+   "a": 1,
+   "e": "Mova a escrita para hooks <code>after</code> de métodos que alteram estado."
+  },
+  {
+   "t": "17",
+   "d": "dev",
+   "q": "Como expor uma regra de negócio própria como endpoint REST na SCAPI?",
+   "o": [
+    "Hook <code>modifyGETResponse</code>",
+    "Custom API: <code>rest-apis/{nome}/</code> com <code>api.json</code>, <code>schema.yaml</code> e script",
+    "Controller SFRA",
+    "OCAPI Data"
+   ],
+   "a": 1,
+   "e": "O endpoint é registrado ao ativar a code version."
+  },
+  {
+   "t": "18",
+   "d": "data",
+   "q": "Onde deve ficar o <code>steptypes.json</code> de um custom job step?",
+   "o": [
+    "<code>cartridge/scripts/</code>",
+    "Na raiz do cartridge (ao lado de <code>cartridge/</code>)",
+    "No <code>package.json</code>",
+    "No BM"
+   ],
+   "a": 1,
+   "e": "Um por cartridge; erros no arquivo impedem o registro dos steps."
+  },
+  {
+   "t": "18",
+   "d": "data",
+   "q": "Um job agendado não executa na sandbox. Causa?",
+   "o": [
+    "Falta de quota",
+    "Jobs agendados não são suportados em sandboxes",
+    "Cartridge errado",
+    "Índice"
+   ],
+   "a": 1,
+   "e": "Use Run Now, a Data API ou <code>b2c job run</code>."
+  },
+  {
+   "t": "18",
+   "d": "data",
+   "q": "Um price book é importado em REPLACE com só parte dos preços. Resultado?",
+   "o": [
+    "Os demais preços são mantidos",
+    "O price book é substituído: preços ausentes são removidos",
+    "O import falha",
+    "Os preços viram zero"
+   ],
+   "a": 1,
+   "e": "É a exceção documentada dos modos de import."
+  },
+  {
+   "t": "19",
+   "d": "dev",
+   "q": "Um <code>result.status</code> volta <code>SERVICE_UNAVAILABLE</code> com motivo <code>CIRCUIT_BROKEN</code>. O que aconteceu?",
+   "o": [
+    "O serviço respondeu 404",
+    "Nenhuma chamada foi feita: falhas recentes abriram o circuit breaker",
+    "O serviço está em mock",
+    "Credencial expirada"
+   ],
+   "a": 1,
+   "e": "Trate com fallback; HTTP 4xx nem conta para o circuit breaker."
+  },
+  {
+   "t": "19",
+   "d": "dev",
+   "q": "Enviar cada pedido ao CRM sem fazer o comprador esperar e tolerando indisponibilidade:",
+   "o": [
+    "Chamada síncrona no PlaceOrder com timeout longo",
+    "Gravar um evento (custom object ou export status) e enviar por job com retentativa",
+    "Chamada no navegador",
+    "E-mail manual"
+   ],
+   "a": 1,
+   "e": "Integração assíncrona."
+  },
+  {
+   "t": "20",
+   "d": "dev",
+   "q": "A PDP é cacheada 24 h, mas a disponibilidade deve atualizar a cada 30 min. Solução?",
+   "o": [
+    "Cache de 30 min na PDP inteira",
+    "Remote include da disponibilidade com <code>applyInventorySensitiveCache</code>",
+    "Desligar o cache",
+    "<code>varyby</code>"
+   ],
+   "a": 1,
+   "e": "O remote include tem cache próprio."
+  },
+  {
+   "t": "20",
+   "d": "dev",
+   "q": "Um custom cache foi invalidado com <code>invalidate(key)</code>, mas alguns compradores ainda veem o valor antigo. Por quê?",
+   "o": [
+    "Bug",
+    "Custom caches são locais por app server; a invalidação só limpa o servidor atual",
+    "Falta reindexar",
+    "TTL infinito"
+   ],
+   "a": 1,
+   "e": "Use TTL curto para dados que mudam."
+  },
+  {
+   "t": "20",
+   "d": "dev",
+   "q": "Os tiles da PLP chamam <code>product.getVariants()</code> para listar cores. O que usar?",
+   "o": [
+    "Nada",
+    "<code>ProductSearchHit.getRepresentedVariationValues('color')</code>",
+    "Custom object",
+    "OCAPI"
+   ],
+   "a": 1,
+   "e": "APIs \"index-friendly\" evitam tocar milhares de objetos."
+  },
+  {
+   "t": "21",
+   "d": "data",
+   "q": "Logs custom pararam às 14h com \"Maximum log file size per day reached\". O que fazer?",
+   "o": [
+    "Pedir ao Support para aumentar",
+    "Reduzir volume e separar por prefixos; volta às 00:00 GMT",
+    "Reiniciar a instância",
+    "<code>console.log</code>"
+   ],
+   "a": 1,
+   "e": "Limite de 10 MB por arquivo, app server e dia."
+  },
+  {
+   "t": "21",
+   "d": "data",
+   "q": "Ver os logs (inclusive debug) da requisição atual, direto no storefront de uma sandbox:",
+   "o": [
+    "Log Center",
+    "Storefront Toolkit › Request Log",
+    "Quota Status",
+    "Code Profiler"
+   ],
+   "a": 1,
+   "e": "O debug fica em memória fora de produção e alimenta o Request Log."
+  },
+  {
+   "t": "22",
+   "d": "dev",
+   "q": "Um form com CSRF precisa aparecer numa PDP cacheada. Como implementar?",
+   "o": [
+    "Desligar o cache da PDP",
+    "Remote include sem cache que gera o token",
+    "Remover o CSRF",
+    "Guardar o token em custom cache"
+   ],
+   "a": 1,
+   "e": "O token cacheado seria o mesmo para todos."
+  },
+  {
+   "t": "22",
+   "d": "setup",
+   "q": "Tudo funciona em Staging, mas o pagamento falha com 401 em Production. Causa mais provável?",
+   "o": [
+    "Código diferente",
+    "Credencial do serviço não configurada em Production",
+    "Cache",
+    "Índice"
+   ],
+   "a": 1,
+   "e": "Credenciais, chaves e certificados são configurados por instância."
+  },
+  {
+   "t": "03",
+   "d": "site",
+   "q": "Uma promoção não aparece no carrinho de um cliente VIP. O que verificar primeiro?",
+   "o": [
+    "O índice de busca",
+    "Campanha ativa, qualificador de customer group/cupom e recálculo da cesta",
+    "O cartridge path",
+    "Os logs de segurança"
+   ],
+   "a": 1,
+   "e": "Promoções dependem de campanha, qualificadores e de <code>dw.order.calculate</code>."
+  },
+  {
+   "t": "10",
+   "d": "dev",
+   "q": "Imprimir HTML confiável vindo de um content asset:",
+   "o": [
+    "<code>${pdict.body}</code>",
+    "<code>&lt;isprint value=\"${pdict.body}\" encoding=\"off\"/&gt;</code>",
+    "<code>&lt;isscript&gt;</code>",
+    "<code>&lt;isinclude&gt;</code>"
+   ],
+   "a": 1,
+   "e": "Só para conteúdo confiável; o padrão faz encoding HTML."
+  },
+  {
+   "t": "11",
+   "d": "site",
+   "q": "Um componente novo do Page Designer não aparece no editor. Causa provável?",
+   "o": [
+    "Cartridge fora do path, JSON inválido ou arquivos com nomes diferentes",
+    "Falta reindexar",
+    "Quota de HTTP",
+    "Cache do navegador"
+   ],
+   "a": 0,
+   "e": "Os três arquivos (.json, .js, .isml) precisam casar e estar no path."
+  }
+ ]
+}

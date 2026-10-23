@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>13 · Custom objects e extensão de system objects · Guia SFCC</title>
+<meta name="description" content="Quando criar custom objects, atributos custom em system objects, site preferences ou content assets; tipos de atributo; key attribute, storage scope, replicação, retenção; CustomObjectMgr com CRUD e consultas; quotas oficiais; metadata e import/export em XML; um caso completo de 'avise-me quando chegar'.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="13" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Custom objects e extensão de system objects</h1>
+  <p class="lead">O B2C Commerce traz um modelo de dados rico (produtos, clientes, pedidos, preferências), e quase todo dado novo cabe nele como <strong>atributo custom</strong> de um objeto existente. Quando não cabe, existe o <strong>custom object</strong>: uma "tabela" definida por metadados, sem mudança de esquema de banco. Este tema ensina a decidir entre as opções (a documentação avisa que custom objects podem afetar a performance e "são tipicamente desnecessários"), a definir tipos e atributos, a ler e gravar pela API dentro das quotas, e a lidar com replicação, retenção e import/export.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>System object</dt><dd>Objeto da plataforma (Product, Profile, CustomerAddress, Order, Category, SitePreferences, OrganizationPreferences…). Muitos aceitam <strong>atributos custom</strong>.</dd>
+  <dt>Atributo custom</dt><dd>Campo novo definido por metadados e acessado em <code>obj.custom.nomeDoAtributo</code>.</dd>
+  <dt>Custom object type</dt><dd>Definição de um tipo novo (ID, <em>key attribute</em>, atributos, replicação, escopo). É sempre da organização inteira.</dd>
+  <dt>Custom object</dt><dd>Uma instância de um custom object type, identificada pelo valor da chave.</dd>
+  <dt>Key attribute</dt><dd>Atributo único que identifica cada instância (string ou inteiro).</dd>
+  <dt>Storage scope</dt><dd>Onde as <em>instâncias</em> vivem: por <strong>site</strong> ou da <strong>organização</strong> (globais, compartilhadas por todos os sites).</dd>
+  <dt>Data replication (staging mode)</dt><dd>Se as instâncias do tipo são replicáveis de Staging para Production (<code>source-to-target</code>) ou não (<code>no-staging</code>). <strong>Não pode ser alterado</strong> depois que o tipo é criado.</dd>
+  <dt>Attribute group</dt><dd>Agrupamento que faz os atributos aparecerem nas telas do BM. Um atributo fora de grupo não aparece.</dd>
+  <dt>Externally managed</dt><dd>Flag que avisa ao usuário do BM que o valor vem de um sistema externo e não deve ser editado à mão.</dd>
+</dl>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="decidir" data-k="cap. 2">
+<h2>Onde guardar cada tipo de dado</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Necessidade</th><th>Melhor lugar</th><th>Por quê</th></tr></thead>
+<tbody>
+<tr><td>Mais informação sobre algo que já existe (material do produto, CPF do cliente, telefone noturno do endereço)</td><td><strong>Atributo custom no system object</strong></td><td>Vem junto com o objeto, aparece no BM, entra no import/export e no índice (se pesquisável)</td></tr>
+<tr><td>Configuração de um site (feature flag, limite, texto técnico)</td><td><strong>Custom site preference</strong> (atributo de <code>SitePreferences</code>)</td><td>Editável no BM por site, replicável, sem tabela nova</td></tr>
+<tr><td>Configuração global da organização</td><td><strong>Custom organization preference</strong> (<code>OrganizationPreferences</code>)</td><td>Uma só para todos os sites</td></tr>
+<tr><td>Texto ou HTML editado pelo merchant</td><td><strong>Content asset</strong></td><td>Library, agenda, localização e Page Designer</td></tr>
+<tr><td>Dado efêmero do comprador durante a navegação</td><td><strong>Sessão</strong> (<code>session.privacy</code>/<code>custom</code>)</td><td>Some sozinho; sem custo de banco</td></tr>
+<tr><td>Entidade nova, sem dono natural: inscrições, fila de integração, logs de webhook, mapeamentos, solicitações "avise-me"</td><td><strong>Custom object</strong></td><td>Não existe objeto da plataforma para isso</td></tr>
+<tr><td>Grande volume, consultas complexas, histórico longo</td><td><strong>Sistema externo</strong> (via serviço)</td><td>As quotas de custom objects e de consultas não comportam</td></tr>
+</tbody>
+</table>
+<aside class="callout" data-kind="exam">
+<p>A documentação é direta: criar custom business objects <em>"can significantly impact overall performance, is typically unnecessary. Avoid creating a custom business object if there's another possible solution."</em> Em prova, se um atributo custom num system object resolve, ele é a resposta certa.</p>
+</aside>
+<p>Atributos de custom objects <strong>não podem ser usados em refinements de busca</strong>, e atributos localizáveis em custom objects estão <strong>depreciados</strong>.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="atributos" data-k="cap. 3">
+<h2>Estendendo system objects com atributos</h2>
+<div class="prose">
+<p>No BM: <em>Administration &gt; Site Development &gt; System Object Types &gt; (objeto) &gt; Attribute Definitions &gt; New</em>. Defina ID, nome e tipo; depois, em <em>Attribute Grouping</em>, ponha o atributo num grupo para ele aparecer nas telas do BM.</p>
+<h3 id="tipos-valor">Tipos de valor</h3>
+<table>
+<thead><tr><th>Tipo</th><th>Uso</th><th>No script</th></tr></thead>
+<tbody>
+<tr><td><code>string</code>, <code>text</code>, <code>html</code></td><td>Textos (html = MarkupText)</td><td>String / <code>MarkupText</code> (<code>.markup</code>)</td></tr>
+<tr><td><code>int</code>, <code>double</code></td><td>Números</td><td>Number</td></tr>
+<tr><td><code>boolean</code></td><td>Flags</td><td>Boolean</td></tr>
+<tr><td><code>date</code>, <code>datetime</code></td><td>Datas (date sem fuso)</td><td>Date</td></tr>
+<tr><td><code>email</code>, <code>password</code></td><td>Validados / mascarados no BM</td><td>String</td></tr>
+<tr><td><code>image</code></td><td>Arquivo de imagem</td><td><code>MediaFile</code></td></tr>
+<tr><td><code>enum-of-string</code>, <code>enum-of-int</code></td><td>Lista fechada (valor único ou multi-seleção)</td><td><code>EnumValue</code> (<code>.value</code>, <code>.displayValue</code>)</td></tr>
+<tr><td><code>set-of-string</code>, <code>set-of-int</code>, <code>set-of-double</code></td><td>Vários valores livres</td><td>Coleção</td></tr>
+</tbody>
+</table>
+<p>Mudar o <strong>tipo</strong> ou a localização de um atributo existente <strong>apaga os valores</strong> (a plataforma cria um atributo novo vazio). Faça backup antes.</p>
+
+<h3 id="limites-atributos">Limites</h3>
+<table>
+<thead><tr><th>Objeto</th><th>Máximo de atributos custom</th></tr></thead>
+<tbody>
+<tr><td>Product (inclui SKUs)</td><td>500</td></tr>
+<tr><td>Site Preferences e Organization Preferences</td><td>500</td></tr>
+<tr><td>Content</td><td>50</td></tr>
+<tr><td>Cada custom object type</td><td>50</td></tr>
+<tr><td>Line Item Tax</td><td>10</td></tr>
+<tr><td>Outros system objects extensíveis</td><td>50</td></tr>
+</tbody>
+</table>
+<p>Um atributo multivalor guarda de 120 a 200 valores, conforme o tipo, e um texto longo ou HTML até 200.000 caracteres (quotas <code>api.object.maxMultiValueAttribute</code> e <code>api.object.stringAttributeLength</code>).</p>
+
+<h3 id="meta-xml">Metadados em XML (versionáveis)</h3>
+<p>Em projeto, defina atributos por arquivo e importe (Site Import ou <code>b2c job import</code>): assim eles entram no Git e chegam iguais a todas as instâncias.</p>
+<script type="text/plain" class="src" data-lang="xml" data-file="metadata/meta/system-objecttype-extensions.xml">
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata xmlns="http://www.demandware.com/xml/impex/metadata/2006-10-31">
+    <type-extension type-id="Profile">
+        <custom-attribute-definitions>
+            <attribute-definition attribute-id="cpf">
+                <display-name xml:lang="x-default">CPF</display-name>
+                <type>string</type>
+                <mandatory-flag>false</mandatory-flag>
+                <externally-managed-flag>false</externally-managed-flag>
+                <min-length>11</min-length>
+            </attribute-definition>
+        </custom-attribute-definitions>
+        <group-definitions>
+            <attribute-group group-id="BrazilData">
+                <display-name xml:lang="x-default">Dados Brasil</display-name>
+                <attribute attribute-id="cpf"/>
+            </attribute-group>
+        </group-definitions>
+    </type-extension>
+
+    <type-extension type-id="Product">
+        <custom-attribute-definitions>
+            <attribute-definition attribute-id="isEcoFriendly">
+                <display-name xml:lang="x-default">Produto sustentável</display-name>
+                <type>boolean</type>
+                <externally-managed-flag>true</externally-managed-flag> <!-- vem do PIM -->
+            </attribute-definition>
+        </custom-attribute-definitions>
+    </type-extension>
+</metadata>
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="lendo e gravando atributos custom">
+var p = require('dw/catalog/ProductMgr').getProduct('CAM-001');
+var isEco = p.custom.isEcoFriendly === true;                       // leitura em qualquer contexto
+
+var profile = customer.profile;                                    // Profile pode ser gravado no storefront
+require('dw/system/Transaction').wrap(function () {
+    profile.custom.cpf = '12345678909';
+});
+
+// metadados em tempo de execução
+var def = profile.describe().getCustomAttributeDefinition('cpf');  // ObjectAttributeDefinition (ou null)
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="tipos" data-k="cap. 4">
+<h2>Definindo custom object types</h2>
+<div class="prose">
+<ol class="steps">
+  <li><em>Administration &gt; Site Development &gt; Custom Object Types &gt; New</em>.</li>
+  <li><strong>ID</strong> do tipo (ex.: <code>BackInStockRequest</code>).</li>
+  <li><strong>Key Attribute</strong>: o nome do atributo-chave (pode ser criado depois, mas antes da primeira instância).</li>
+  <li><strong>Data Replication</strong>: replicável ou não. Irreversível.</li>
+  <li><strong>Storage Scope</strong>: Site ou Organization.</li>
+  <li>Na aba <em>Attribute Definitions</em>, crie os atributos (UUID, creationDate e lastModified já existem).</li>
+  <li>Na aba <em>Attribute Grouping</em>, crie um grupo e <strong>inclua o key attribute</strong>: sem isso, não dá para criar instâncias pelo BM.</li>
+</ol>
+<p>Os tipos são criados em <strong>Staging</strong> e replicados (tarefa <em>Custom Object Types</em>). A documentação avisa: nunca defina tipos direto em Development ou Production, porque a replicação os remove.</p>
+<script type="text/plain" class="src" data-lang="xml" data-file="metadata/meta/custom-objecttype-definitions.xml">
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata xmlns="http://www.demandware.com/xml/impex/metadata/2006-10-31">
+    <custom-type type-id="BackInStockRequest">
+        <display-name xml:lang="x-default">Avise-me quando chegar</display-name>
+        <staging-mode>no-staging</staging-mode>     <!-- nasce em Production: NÃO replicável -->
+        <storage-scope>site</storage-scope>
+        <retention-days>90</retention-days>          <!-- opcional: limpeza automática -->
+        <key-definition attribute-id="requestId">
+            <display-name xml:lang="x-default">ID</display-name>
+            <type>string</type>
+            <min-length>1</min-length>
+        </key-definition>
+        <attribute-definitions>
+            <attribute-definition attribute-id="productId">
+                <display-name xml:lang="x-default">Produto</display-name>
+                <type>string</type>
+            </attribute-definition>
+            <attribute-definition attribute-id="email">
+                <display-name xml:lang="x-default">E-mail</display-name>
+                <type>email</type>
+            </attribute-definition>
+            <attribute-definition attribute-id="status">
+                <display-name xml:lang="x-default">Status</display-name>
+                <type>enum-of-string</type>
+                <value-definitions>
+                    <value-definition default="true"><value>PENDING</value></value-definition>
+                    <value-definition><value>NOTIFIED</value></value-definition>
+                </value-definitions>
+            </attribute-definition>
+        </attribute-definitions>
+        <group-definitions>
+            <attribute-group group-id="Main">
+                <display-name xml:lang="x-default">Dados</display-name>
+                <attribute attribute-id="requestId"/>
+                <attribute attribute-id="productId"/>
+                <attribute attribute-id="email"/>
+                <attribute attribute-id="status"/>
+            </attribute-group>
+        </group-definitions>
+    </custom-type>
+</metadata>
+</script>
+<aside class="callout" data-kind="verify">
+<p>Os elementos <code>staging-mode</code> (<code>no-staging</code> / <code>source-to-target</code>), <code>storage-scope</code> (<code>site</code> / <code>organization</code>), <code>retention-days</code> e <code>key-definition</code> vêm do <code>metadata.xsd</code> oficial. A semântica exata da limpeza por <code>retention-days</code> (data de referência, frequência) não está detalhada nos guias consultados; confira na ajuda da sua versão antes de depender dela, ou faça a limpeza num job.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="api" data-k="cap. 5">
+<h2>CRUD e consultas com CustomObjectMgr</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Método</th><th>Para quê</th></tr></thead>
+<tbody>
+<tr><td><code>createCustomObject(type, key)</code></td><td>Cria (dentro de transação); a chave é string ou número</td></tr>
+<tr><td><code>getCustomObject(type, key)</code></td><td>Busca pela chave (<code>null</code> se não existe)</td></tr>
+<tr><td><code>queryCustomObject(type, query, args…)</code></td><td>Primeiro que casa com a consulta</td></tr>
+<tr><td><code>queryCustomObjects(type, query, sort, args…)</code></td><td><code>SeekableIterator</code> com os que casam</td></tr>
+<tr><td><code>getAllCustomObjects(type)</code></td><td>Todos (<code>SeekableIterator</code>): só em jobs</td></tr>
+<tr><td><code>remove(obj)</code></td><td>Apaga (dentro de transação)</td></tr>
+<tr><td><code>describe(type)</code></td><td>Metadados do tipo</td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/scripts/helpers/backInStockHelpers.js">
+'use strict';
+
+var CustomObjectMgr = require('dw/object/CustomObjectMgr');
+var Transaction = require('dw/system/Transaction');
+var UUIDUtils = require('dw/util/UUIDUtils');
+
+var TYPE = 'BackInStockRequest';
+
+/** Registra um pedido de aviso (evita duplicado por e-mail + produto). */
+function register(email, productId) {
+    var existing = CustomObjectMgr.queryCustomObject(TYPE,
+        'custom.email = {0} AND custom.productId = {1} AND custom.status = {2}',
+        email, productId, 'PENDING');
+    if (existing) return existing.custom.requestId;
+
+    return Transaction.wrap(function () {
+        var id = UUIDUtils.createUUID();
+        var co = CustomObjectMgr.createCustomObject(TYPE, id);
+        co.custom.email = email;
+        co.custom.productId = productId;
+        co.custom.status = 'PENDING';
+        return id;
+    });
+}
+
+/**
+ * Pedidos pendentes de um produto (para o job de notificação).
+ * Consultas aceitam até 6 expressões de atributo (4 custom) e 3 critérios de ordenação.
+ */
+function pendingFor(productId, callback) {
+    var it = CustomObjectMgr.queryCustomObjects(TYPE,
+        'custom.productId = {0} AND custom.status = {1}', 'creationDate asc', productId, 'PENDING');
+    try {
+        while (it.hasNext()) {
+            callback(it.next());
+        }
+    } finally {
+        it.close();
+    }
+}
+
+/** Marca como notificado (uma transação por objeto, como recomenda o guia). */
+function markNotified(co) {
+    Transaction.wrap(function () { co.custom.status = 'NOTIFIED'; });
+}
+
+/** Remove um pedido. */
+function cancel(requestId) {
+    var co = CustomObjectMgr.getCustomObject(TYPE, requestId);
+    if (co) {
+        Transaction.wrap(function () { CustomObjectMgr.remove(co); });
+    }
+}
+
+module.exports = { register: register, pendingFor: pendingFor, markNotified: markNotified, cancel: cancel };
+</script>
+<h3 id="sintaxe-query">Sintaxe das consultas</h3>
+<ul>
+  <li>Atributos de sistema pelo nome (<code>creationDate</code>, <code>lastModified</code>, a chave); custom com <code>custom.</code>.</li>
+  <li>Operadores: <code>=</code>, <code>!=</code>, <code>&lt;</code>, <code>&gt;</code>, <code>&lt;=</code>, <code>&gt;=</code>, <code>LIKE</code> (com <code>*</code>), <code>ILIKE</code>, <code>AND</code>, <code>OR</code>, <code>NOT</code>, <code>NULL</code>.</li>
+  <li>Use placeholders <code>{0}</code>, <code>{1}</code>… com argumentos, nunca concatenação de strings.</li>
+  <li>Quotas de consulta: até <strong>6</strong> expressões de atributo, <strong>4</strong> sobre atributos custom, <strong>3</strong> critérios de ordenação.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="replicacao" data-k="cap. 6">
+<h2>Replicação, escopo e contexto de escrita</h2>
+<div class="prose">
+<table>
+<thead><tr><th></th><th>Replicável (<code>source-to-target</code>)</th><th>Não replicável (<code>no-staging</code>)</th></tr></thead>
+<tbody>
+<tr><td>Onde os dados nascem</td><td>Em Staging (configuração, mapeamentos editados pelo time)</td><td>Na própria instância (Production): inscrições, filas, logs</td></tr>
+<tr><td>Replicação</td><td>Tarefa <em>Custom Objects</em> (global ou de site, conforme o escopo); substitui os do destino</td><td>Nunca replicados; os dados ficam onde foram criados</td></tr>
+<tr><td>Escrita no storefront</td><td><strong>Somente leitura</strong> (quota <code>object.StageableCustomObjectPO.readonly@SF</code>)</td><td>Permitida (até 10 criações e 10 remoções por request)</td></tr>
+<tr><td>Quota de objetos por instância</td><td>400.000 (aviso em 240.000)</td><td>400.000 (aviso em 240.000)</td></tr>
+</tbody>
+</table>
+<aside class="callout" data-kind="warn">
+<p>O erro clássico: um tipo replicável usado para dados gerados em Production. A próxima replicação com a tarefa Custom Objects <strong>apaga e substitui</strong> esses registros pelos de Staging. E, além disso, o storefront nem consegue gravá-los. Dados que nascem em Production precisam ser não replicáveis, e a escolha não pode ser mudada depois de criado o tipo.</p>
+</aside>
+<p>Ordem na replicação: o <strong>tipo</strong> (tarefa <em>Custom Object Types</em>) antes das <strong>instâncias</strong>. A replicação de custom object types também apaga ou sobrescreve tipos definidos diretamente no destino.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="impex" data-k="cap. 7">
+<h2>Import, export e limpeza</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="xml" data-file="impex/custom-objects/bis-requests.xml">
+<?xml version="1.0" encoding="UTF-8"?>
+<custom-objects xmlns="http://www.demandware.com/xml/impex/customobject/2006-10-31">
+    <custom-object type-id="BackInStockRequest" object-id="7f1c2e9a-0b1d-4c55-9d3e-2a1b2c3d4e5f">
+        <object-attribute attribute-id="productId">CAM-BASICA-AZUL-M</object-attribute>
+        <object-attribute attribute-id="email">ana@example.com</object-attribute>
+        <object-attribute attribute-id="status">PENDING</object-attribute>
+    </custom-object>
+</custom-objects>
+</script>
+<ul>
+  <li><strong>Import/export</strong>: job steps <code>ImportCustomObjects</code> e <code>ExportCustomObjects</code>, Site Import &amp; Export (unidade <em>Custom Objects</em>) ou a OCAPI/SCAPI (Data API e <em>Shopper Custom Objects</em>, para tipos expostos). Veja o <a class="text-link" href="18-jobs.html">tema 18</a>.</li>
+  <li><strong>Exclusão em massa</strong> pelo BM: <em>Custom Object Editor &gt; Find &gt; Edit All &gt; Delete Custom Objects</em>, que roda como batch process.</li>
+  <li><strong>Limpeza programada</strong>: um job que apaga registros antigos (por exemplo, NOTIFIED com mais de 30 dias), com uma transação por objeto ou chunk-oriented.</li>
+</ul>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/scripts/jobs/purgeBackInStock.js">
+'use strict';
+
+var CustomObjectMgr = require('dw/object/CustomObjectMgr');
+var Transaction = require('dw/system/Transaction');
+var Status = require('dw/system/Status');
+var Logger = require('dw/system/Logger').getLogger('jobs', 'purgeBIS');
+
+/** Step task-oriented: apaga pedidos NOTIFIED mais antigos que N dias (parâmetro do job). */
+exports.execute = function (parameters) {
+    var days = parameters.OlderThanDays || 30;
+    var limit = new Date(Date.now() - days * 24 * 3600 * 1000);
+    var it = CustomObjectMgr.queryCustomObjects('BackInStockRequest',
+        'custom.status = {0} AND lastModified < {1}', null, 'NOTIFIED', limit);
+    var removed = 0;
+    try {
+        while (it.hasNext()) {
+            var co = it.next();
+            Transaction.wrap(function () { CustomObjectMgr.remove(co); });
+            removed++;
+        }
+    } finally {
+        it.close();
+    }
+    Logger.info('removidos: {0}', removed);
+    return new Status(Status.OK, 'OK', 'removidos ' + removed);
+};
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="caso" data-k="cap. 8">
+<h2>Caso completo: "avise-me quando chegar"</h2>
+<div class="prose">
+<script type="text/plain" class="mmd" data-caption="custom object como ponte entre storefront e job">
+flowchart LR
+  PDP["PDP: produto esgotado<br/>form com e-mail"] -->|"POST + CSRF"| C["Controller<br/>BackInStock-Register"]
+  C -->|"createCustomObject<br/>(tipo não replicável)"| CO[("BackInStockRequest<br/>PENDING")]
+  INV["Import de estoque<br/>(job)"] --> J["Job: Notify<br/>(chunk-oriented)"]
+  J -->|"query PENDING<br/>produto voltou?"| CO
+  J -->|"dw.net.Mail ou<br/>serviço de e-mail"| E["E-mail ao comprador"]
+  J -->|"status = NOTIFIED"| CO
+  P["Job: Purge"] -->|"remove NOTIFIED antigos"| CO
+</script>
+<ol class="steps">
+  <li>Metadados: o tipo <code>BackInStockRequest</code> (não replicável, escopo de site), importado via XML.</li>
+  <li>Storefront: um form simples (<a class="text-link" href="12-forms.html">tema 12</a>) na PDP de produtos indisponíveis; o controller chama <code>backInStockHelpers.register</code>.</li>
+  <li>Job de notificação (<a class="text-link" href="18-jobs.html">tema 18</a>) agendado depois do import de inventário: para cada pedido pendente cujo produto voltou a ter estoque, envia o e-mail e marca NOTIFIED.</li>
+  <li>Job de limpeza semanal.</li>
+  <li>Monitoramento: <em>Administration &gt; Operations &gt; Quota Status</em> para o volume de objetos.</li>
+</ol>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/BackInStock.js">
+'use strict';
+
+var server = require('server');
+var csrfProtection = require('*/cartridge/scripts/middleware/csrf');
+
+server.post('Register', server.middleware.https, csrfProtection.validateAjaxRequest, function (req, res, next) {
+    var form = server.forms.getForm('backInStock');
+    if (!form.valid) {
+        res.json({ success: false, fields: require('*/cartridge/scripts/formErrors').getFormErrors(form) });
+        return next();
+    }
+    var helpers = require('*/cartridge/scripts/helpers/backInStockHelpers');
+    var id = helpers.register(form.email.value.toLowerCase(), form.pid.value);
+    res.json({ success: true, requestId: id });
+    return next();
+});
+
+module.exports = server.exports();
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Custom object para dados que pertencem a um system object</strong> (ex.: "ProductExtraInfo" com chave = SKU). Use atributo custom no Product.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Custom object como banco de dados genérico</strong> (catálogo paralelo, histórico de navegação, analytics): estoura quotas e não tem índice de busca.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Tipo replicável para dados de Production.</strong> É apagado pela replicação e é somente leitura no storefront.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong><code>getAllCustomObjects</code> no storefront</strong>, sem fechar o iterador.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>Definição de custom object type: <em>Administration &gt; Site Development &gt; Custom Object Types</em>. Instâncias: <em>Merchant Tools &gt; Custom Objects &gt; Custom Object Editor</em>.</li>
+  <li>O <strong>tipo</strong> é sempre da organização; as <strong>instâncias</strong> podem ser de site ou de organização.</li>
+  <li>A flag de replicação não muda depois de criado o tipo.</li>
+  <li>O key attribute precisa estar num attribute group para criar instâncias pelo BM.</li>
+  <li>Configuração de site → <strong>site preference custom</strong>, não custom object.</li>
+  <li>Quota: 400 mil por categoria (replicáveis e não replicáveis); 10 criações por request de storefront.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>Não consigo criar instâncias no BM</td><td>Key attribute fora de attribute group</td><td>Inclua a chave num grupo.</td></tr>
+<tr><td>Atributo criado não aparece na tela do BM</td><td>Fora de grupo</td><td>Adicione a um attribute group.</td></tr>
+<tr><td>Exceção ao gravar no storefront</td><td>Tipo replicável (read-only no storefront); sem transação; limite de 10 criações por request</td><td>Use tipo não replicável; <code>Transaction.wrap</code>; mova para um job.</td></tr>
+<tr><td>Registros sumiram em Production</td><td>Tipo replicável + replicação de Custom Objects</td><td>Recrie o tipo como não replicável (exige migração dos dados).</td></tr>
+<tr><td>Valores antigos perdidos depois de editar um atributo</td><td>Mudança de tipo ou de localização do atributo</td><td>Restaure do backup; evite mudar o tipo.</td></tr>
+<tr><td>Consulta lança erro de quota</td><td>Mais de 6 expressões (4 custom) ou mais de 3 ordenações</td><td>Simplifique; filtre em memória o resto (com cuidado).</td></tr>
+<tr><td>Quota Status em laranja ou vermelho para custom objects</td><td>Volume perto de 240 mil ou 400 mil</td><td>Job de limpeza; retenção; mova o dado para fora da plataforma.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Escolher entre atributo custom, site e organization preference, content asset, sessão, custom object e sistema externo.</li>
+  <li>Criar atributos custom com o tipo certo, agrupá-los e versioná-los em XML.</li>
+  <li>Definir custom object types: chave, escopo, replicação (irreversível), atributos e grupos.</li>
+  <li>Usar <code>CustomObjectMgr</code> para criar, ler, consultar e remover, com transações e iteradores fechados.</li>
+  <li>Explicar o efeito da replicação e por que tipos replicáveis são read-only no storefront.</li>
+  <li>Conhecer as quotas (400 mil; 10 por request; limites de consulta) e planejar limpeza.</li>
+  <li>Importar e exportar custom objects (XML, job steps).</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">O negócio quer guardar o "material da sola" de cada calçado. Onde?</p>
+  <ol class="opts-l"><li>Custom object <code>ShoeMaterial</code> com chave = SKU</li><li>Atributo custom no system object Product</li><li>Site preference</li><li>Content asset</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> É um dado do produto; vem no import do catálogo, aparece no BM e pode ir ao índice.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Inscrições de newsletter feitas no storefront de Production devem ser guardadas num custom object type…</p>
+  <ol class="opts-l"><li>Replicável, com escopo de organização</li><li>Não replicável</li><li>Replicável, com escopo de site</li><li>Qualquer um</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Os dados nascem em Production: replicável seria sobrescrito pela replicação e é somente leitura no storefront.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual afirmação sobre a configuração de replicação de um custom object type está correta?</p>
+  <ol class="opts-l"><li>Pode ser alterada a qualquer momento</li><li>Não pode ser alterada depois que o tipo é criado</li><li>Só vale para Sandboxes</li><li>É definida por instância</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Pela documentação: "This selection can't be changed after the custom object type has been created."</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Por que um merchant não consegue criar instâncias de um tipo novo no Custom Object Editor?</p>
+  <ol class="opts-l"><li>Falta reindexar</li><li>O key attribute não está em nenhum attribute group</li><li>O tipo é replicável</li><li>Falta code version</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> A documentação exige incluir a chave num grupo.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Onde guardar um limite de "máximo de itens no carrinho" que varia por site?</p>
+  <ol class="opts-l"><li>Custom object global</li><li>Custom site preference (atributo de SitePreferences)</li><li>Constante no código</li><li>Sessão</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Configuração de site é preferência, editável no BM e replicável.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Num request de storefront, quantos custom objects podem ser criados antes de violar a quota padrão?</p>
+  <ol class="opts-l"><li>1</li><li>10</li><li>100</li><li>Ilimitados</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Quota <code>api.dw.object.CustomObjectMgr.create()</code>: 10, com aviso em 6. Volume grande é trabalho de job.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-business-objects.html">Use Custom Object Definitions</a>: system objects, custom objects, limites de atributos.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/creatingbusinessobjects.html">Create Custom Business Objects</a>: quando evitar, definição e criação.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-governance-and-quotas.html">Governance and Quotas</a> e as tabelas <a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/quota/html/Object_Quotas.html">Object Quotas</a> e <a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/quota/html/API_Quotas.html">API Quotas</a>.</li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/scriptapi/html/index.html?target=class_dw_object_CustomObjectMgr.html">Script API: CustomObjectMgr</a></li>
+  <li>XSDs oficiais <code>metadata.xsd</code> e <code>customobject.xsd</code> (b2c CLI: <code>b2c docs schema metadata</code>).</li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_data_replication_tasks.htm&amp;type=5">Data Replication Tasks</a>: Custom Object Types e Custom Objects.</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

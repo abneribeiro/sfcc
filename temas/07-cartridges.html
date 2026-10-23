@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>07 · Cartridges reutilizáveis · Guia SFCC</title>
+<meta name="description" content="Como criar cartridges reutilizáveis no B2C Commerce: estrutura, convenções de nome, cartridge path e precedência, require com */, ~/ e modules, registro de hooks em hooks.json, cartridges de integração core + SFRA, configuração por metadados e cartridges de Business Manager.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="07" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Cartridges reutilizáveis</h1>
+  <p class="lead">O cartridge é a unidade de empacotamento e deploy do B2C Commerce: tudo o que você escreve vive num. Um cartridge bem desenhado pode ser ligado a vários sites e projetos sem alteração, configurado pelo merchant e atualizado sem conflitos. Este tema cobre a estrutura, a nomenclatura, a resolução por cartridge path, o sistema de módulos (<code>require</code>), o registro de hooks, o padrão de cartridges de integração e os cartridges que estendem o Business Manager.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<p>A documentação define o cartridge como <em>"um mecanismo para empacotar e implantar código e dados"</em>, usado para estender funcionalidade ou integrar sistemas externos. Há dois tipos:</p>
+<ul>
+  <li><strong>Genéricos</strong>: funcionalidade reutilizável que pode ir para muitos sites (uma integração de pagamento, um conector de ERP).</li>
+  <li><strong>Específicos de aplicação</strong>: funcionalidade de um site em particular (o <code>app_custom_acme</code>).</li>
+</ul>
+<p>Crie um cartridge novo quando a funcionalidade é <strong>genérica</strong> (será reaproveitada) ou <strong>grande e autocontida</strong> (manutenção isolada). A documentação lembra que funcionalidade nova nem sempre exige um cartridge novo.</p>
+<dl class="gloss">
+  <dt>Cartridge path</dt><dd>Lista de cartridges separada por <code>:</code>, por site, lida da esquerda para a direita. Funciona como um <em>classpath</em>: o primeiro arquivo encontrado vence.</dd>
+  <dt>Code version</dt><dd>A pasta no servidor onde os cartridges são enviados; a ativa é a usada.</dd>
+  <dt>hooks.json</dt><dd>Registro de hooks do cartridge, apontado pela chave <code>"hooks"</code> no <code>package.json</code> do cartridge.</dd>
+  <dt>Extension point</dt><dd>Nome de um hook (<code>dw.order.calculate</code>, <code>dw.ocapi.shop.basket.afterPOST</code>, <code>app.payment.processor.x</code>).</dd>
+  <dt>bm_extensions.xml</dt><dd>Descritor de extensões do Business Manager (menus, ações, botões, campos de busca).</dd>
+</dl>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="estrutura" data-k="cap. 2">
+<h2>Estrutura de um cartridge</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="text" data-file="int_acme_reviews/ (cartridge de integração reutilizável)">
+int_acme_reviews/
+├── package.json                    # { "name": "int_acme_reviews", "hooks": "./cartridge/scripts/hooks.json" }
+├── cartridge/
+│   ├── int_acme_reviews.properties # arquivo de identificação do cartridge
+│   ├── controllers/                # rotas (SFRA: module server)
+│   ├── forms/default/              # form definitions XML
+│   ├── models/                     # view models
+│   ├── scripts/
+│   │   ├── hooks.json              # registro de hooks
+│   │   ├── hooks/                  # implementações dos hooks
+│   │   ├── services/               # wrappers do Service Framework
+│   │   ├── helpers/                # lógica de negócio reutilizável
+│   │   └── jobs/                   # scripts de job steps
+│   ├── templates/
+│   │   ├── default/                # ISML
+│   │   └── resources/              # *.properties
+│   ├── static/default/             # imagens, css/js compilados
+│   ├── experience/                 # page/component types do Page Designer
+│   ├── steptypes.json              # declaração de job steps custom
+│   └── caches.json                 # declaração de custom caches (CacheMgr)
+├── metadata/                       # (convenção) XML a importar: meta/, services.xml, jobs.xml, preferences
+└── test/                           # testes unitários (mocha)
+</script>
+<script type="text/plain" class="src" data-lang="properties" data-file="int_acme_reviews/cartridge/int_acme_reviews.properties">
+## cartridge.properties for cartridge int_acme_reviews
+demandware.cartridges.int_acme_reviews.multipleLanguageStorefront=true
+demandware.cartridges.int_acme_reviews.id=int_acme_reviews
+</script>
+<aside class="callout" data-kind="note">
+<p>O <code>package.json</code> <strong>dentro da pasta do cartridge</strong> (irmão de <code>cartridge/</code>) é lido pela plataforma por causa da chave <code>hooks</code>. O <code>package.json</code> da <strong>raiz do repositório</strong> é do Node (scripts npm, dependências de build) e nunca é usado em runtime. Pelo WebDAV, o nome da pasta do cartridge pode ter no máximo 50 caracteres.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="nomes" data-k="cap. 3">
+<h2>Convenções de nome e camadas</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Prefixo</th><th>Uso</th><th>Exemplos reais</th></tr></thead>
+<tbody>
+<tr><td><code>app_</code></td><td>Storefront: base ou customização de site e marca</td><td><code>app_storefront_base</code>, <code>app_custom_mybrand</code> (sugestão do guia oficial)</td></tr>
+<tr><td><code>plugin_</code></td><td>Feature opcional que estende o SFRA</td><td><code>plugin_wishlists</code>, <code>plugin_giftregistry</code>, <code>plugin_sitemap</code></td></tr>
+<tr><td><code>int_</code> / <code>link_</code></td><td>Integrações com terceiros; LINK = parceiro certificado</td><td><code>int_adyen_SFRA</code>, <code>int_cybersource_sfra</code>, <code>int_loqate_core</code></td></tr>
+<tr><td><code>bm_</code></td><td>Extensões do Business Manager</td><td><code>bm_app_storefront_base</code>, <code>bm_adyen</code></td></tr>
+<tr><td><code>lib_</code></td><td>Biblioteca compartilhada entre cartridges</td><td><code>lib_productlist</code> (usada por wishlists e gift registry)</td></tr>
+</tbody>
+</table>
+
+<h3 id="core-sfra">O padrão "core + adaptador"</h3>
+<p>Integrações maduras se dividem em dois ou três cartridges: um <strong>core</strong> independente de storefront (serviços, regras, jobs, hooks de OCAPI/SCAPI) e um <strong>adaptador</strong> por arquitetura (controllers e templates para SFRA, ou para SiteGenesis). O pacote de referência analisado tem exemplos reais: <code>int_loqate_core</code> + <code>int_loqate_sfra</code>, <code>int_turnto_core_v5</code> + <code>int_turnto_sfra_v5</code>. Para customizar uma integração sem tocar nela, os projetos acrescentam um terceiro cartridge à esquerda (<code>int_loqate_custom</code>).</p>
+<script type="text/plain" class="mmd" data-caption="integração em camadas no cartridge path">
+flowchart LR
+  APP["app_custom_acme<br/>(site)"] --> CUS["int_reviews_custom<br/>(ajustes do projeto)"]
+  CUS --> SFRA["int_reviews_sfra<br/>(controllers, ISML, JS de cliente)"]
+  SFRA --> CORE["int_reviews_core<br/>(serviços, helpers, jobs, hooks OCAPI)"]
+  CORE --> BASE["app_storefront_base"]
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="path" data-k="cap. 4">
+<h2>Cartridge path e precedência</h2>
+<div class="prose">
+<p>Cada site tem o seu cartridge path em <em>Administration &gt; Sites &gt; Manage Sites &gt; (site) &gt; Settings &gt; Cartridges</em>. O Business Manager tem o dele (no site <em>Business Manager</em>, ou <code>Sites-Site</code>), usado pelos cartridges <code>bm_*</code>.</p>
+<table>
+<thead><tr><th>Artefato</th><th>Como é resolvido</th></tr></thead>
+<tbody>
+<tr><td>Controller (<code>Product-Show</code>)</td><td>Primeiro <code>controllers/Product.js</code> no path</td></tr>
+<tr><td>Template (<code>res.render('cart/cart')</code>, <code>&lt;isinclude template&gt;</code>)</td><td>Primeiro <code>templates/&lt;locale ou default&gt;/cart/cart.isml</code></td></tr>
+<tr><td>Form (<code>server.forms.getForm('address')</code>)</td><td>Primeiro <code>forms/&lt;locale ou default&gt;/address.xml</code></td></tr>
+<tr><td>Estático (<code>URLUtils.staticURL('/js/x.js')</code>)</td><td>Primeiro <code>static/&lt;locale ou default&gt;/js/x.js</code></td></tr>
+<tr><td>Script com <code>require('*/cartridge/…')</code></td><td>Primeiro cartridge do path com aquele caminho</td></tr>
+<tr><td>Hooks</td><td><strong>Todos</strong> os registrados rodam, na ordem do path (capítulo 6)</td></tr>
+</tbody>
+</table>
+<p>Para pastas por locale (<code>templates/pt_BR/</code>), a busca tenta primeiro a pasta do locale da requisição e depois <code>default</code>. A documentação de localização ressalta que o <em>fallback de locale</em> configurado no BM (pt_BR → pt → default) vale para atributos de objetos persistentes, não para templates, forms ou arquivos de cartridge.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="modulos" data-k="cap. 5">
+<h2>Módulos e require</h2>
+<div class="prose">
+<p>Desde a 13.6, o B2C Commerce segue o CommonJS Modules 1.1.1. A busca do <code>require()</code> tem regras próprias, descritas no guia <em>Script Modules</em>:</p>
+<table>
+<thead><tr><th>Forma</th><th>Resolve para</th><th>Uso típico</th></tr></thead>
+<tbody>
+<tr><td><code>require('dw/catalog/ProductMgr')</code></td><td>Classe ou pacote da Script API</td><td>Sempre que usar a API</td></tr>
+<tr><td><code>require('*/cartridge/scripts/helpers/x')</code></td><td>Caminho relativo ao <strong>início do cartridge path</strong> (o primeiro cartridge que tiver o arquivo)</td><td>O padrão do SFRA: permite overlay</td></tr>
+<tr><td><code>require('~/cartridge/scripts/helpers/x')</code></td><td>Caminho relativo ao <strong>cartridge atual</strong></td><td>Quando o arquivo precisa ser o do próprio cartridge, sem overlay</td></tr>
+<tr><td><code>require('./x')</code> / <code>require('../x')</code></td><td>Relativo ao arquivo atual</td><td>Módulos internos</td></tr>
+<tr><td><code>require('app_storefront_base/cartridge/models/cart')</code></td><td>Nome do cartridge (pasta de topo da code version)</td><td>Referência explícita a um cartridge específico</td></tr>
+<tr><td><code>require('server')</code></td><td>Pasta de topo de mesmo nome ou o diretório <code>modules</code></td><td>Módulo server do SFRA</td></tr>
+<tr><td><code>module.superModule</code></td><td>O mesmo caminho no próximo cartridge à direita</td><td>Extensão (<a class="text-link" href="06-estender-sfra.html#models">tema 06</a>)</td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="src" data-lang="js" data-file="int_acme_reviews/cartridge/scripts/helpers/reviewHelpers.js">
+'use strict';
+
+var Site = require('dw/system/Site');                                   // Script API
+var collections = require('*/cartridge/scripts/util/collections');      // do SFRA (overlay possível)
+var reviewService = require('~/cartridge/scripts/services/reviewService'); // sempre o deste cartridge
+
+/** Configuração do cartridge vem de site preferences (definidas por metadata XML). */
+function isEnabled() {
+    return Site.getCurrent().getCustomPreferenceValue('acmeReviewsEnabled') === true;
+}
+
+/**
+ * Reviews de um produto; devolve [] se a feature está desligada ou o serviço falha.
+ * @param {string} productId
+ * @returns {Array<{rating: number, text: string}>}
+ */
+function getReviews(productId) {
+    if (!isEnabled()) return [];
+    var result = reviewService.call({ productId: productId });
+    return result.ok ? result.object.reviews : [];
+}
+
+module.exports = {
+    isEnabled: isEnabled,
+    getReviews: getReviews,
+    averageRating: function (reviews) {
+        if (!reviews.length) return 0;
+        var sum = reviews.reduce(function (acc, r) { return acc + r.rating; }, 0);
+        return Math.round((sum / reviews.length) * 10) / 10;
+    }
+};
+</script>
+<aside class="callout" data-kind="exam">
+<p><code>*/</code> procura no cartridge path inteiro; <code>~/</code>, só no cartridge atual. Num cartridge reutilizável, use <code>*/</code> para pontos que o projeto pode querer sobrescrever, e <code>~/</code> para peças internas que não devem ser trocadas.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="hooks" data-k="cap. 6">
+<h2>Registrando hooks</h2>
+<div class="prose">
+<p>Hooks são <strong>extension points</strong> nomeados. O cartridge declara, num <code>hooks.json</code>, qual módulo implementa cada um; quem dispara é a plataforma (OCAPI/SCAPI, <code>dw.order.calculate</code>…) ou o seu código, via <code>dw.system.HookMgr</code>.</p>
+<script type="text/plain" class="src" data-lang="json" data-file="int_acme_reviews/package.json">
+{
+    "name": "int_acme_reviews",
+    "hooks": "./cartridge/scripts/hooks.json"
+}
+</script>
+<script type="text/plain" class="src" data-lang="json" data-file="int_acme_reviews/cartridge/scripts/hooks.json">
+{
+    "hooks": [
+        { "name": "app.product.reviews", "script": "./hooks/reviews.js" },
+        { "name": "dw.ocapi.shop.product.modifyGETResponse", "script": "./hooks/ocapiProduct.js" },
+        { "name": "app.template.afterFooter", "script": "./hooks/templateHooks.js" }
+    ]
+}
+</script>
+<p>O caminho em <code>script</code> é relativo ao arquivo <code>hooks.json</code>. O módulo exporta uma função com o nome do método chamado:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="int_acme_reviews/cartridge/scripts/hooks/reviews.js">
+'use strict';
+
+var reviewHelpers = require('~/cartridge/scripts/helpers/reviewHelpers');
+
+/**
+ * Hook custom "app.product.reviews": qualquer controller (ou outro cartridge) pode chamar
+ *   HookMgr.callHook('app.product.reviews', 'getSummary', productId)
+ * sem depender do nome deste cartridge.
+ */
+exports.getSummary = function (productId) {
+    var reviews = reviewHelpers.getReviews(productId);
+    return { count: reviews.length, average: reviewHelpers.averageRating(reviews) };
+};
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/Product.js (consumidor)">
+'use strict';
+
+var server = require('server');
+var HookMgr = require('dw/system/HookMgr');
+server.extend(module.superModule);
+
+server.append('Show', function (req, res, next) {
+    var viewData = res.getViewData();
+    if (HookMgr.hasHook('app.product.reviews')) {
+        viewData.reviewSummary = HookMgr.callHook('app.product.reviews', 'getSummary', viewData.product.id);
+    }
+    res.setViewData(viewData);
+    next();
+});
+
+module.exports = server.exports();
+</script>
+
+<h3 id="ordem-hooks">Vários cartridges, o mesmo hook</h3>
+<p>Segundo o guia <em>SFRA Hooks</em>:</p>
+<ul>
+  <li>Em tempo de execução, rodam <strong>todos</strong> os hooks registrados para o extension point, em <strong>todos</strong> os cartridges do path, na <strong>ordem do cartridge path</strong>. Mudar a ordem do path muda a ordem dos hooks.</li>
+  <li>Num único <code>hooks.json</code> você pode registrar vários módulos para o mesmo ponto, mas <strong>não controla a ordem</strong> entre eles.</li>
+  <li>Quando vários módulos rodam, <strong>só o retorno do último</strong> é devolvido por <code>callHook</code>.</li>
+</ul>
+<aside class="callout" data-kind="warn">
+<p>Nos hooks de <strong>OCAPI/SCAPI</strong>, retornar qualquer valor (inclusive <code>new Status(Status.OK)</code>) faz a plataforma <strong>pular a implementação padrão e os hooks seguintes</strong>. Para só complementar o comportamento, não retorne nada; retorne <code>Status.ERROR</code> apenas para interromper com erro. Detalhes no <a class="text-link" href="17-ocapi.html">tema 17</a>.</p>
+</aside>
+
+<h3 id="hooks-sistema">Hooks que todo dev SFCC encontra</h3>
+<table>
+<thead><tr><th>Extension point</th><th>Quem chama</th><th>Para quê</th></tr></thead>
+<tbody>
+<tr><td><code>dw.order.calculate</code> (+ <code>calculateShipping</code>, <code>calculateTax</code>)</td><td>Plataforma (OCAPI/SCAPI) e SFRA</td><td>Recalcular a cesta</td></tr>
+<tr><td><code>dw.ocapi.shop.*</code> / <code>dw.ocapi.data.*</code></td><td>OCAPI/SCAPI</td><td>before, after e modifyResponse de recursos</td></tr>
+<tr><td><code>app.payment.processor.&lt;id&gt;</code></td><td>SFRA (checkout)</td><td>Handle e Authorize de pagamento</td></tr>
+<tr><td><code>app.validate.order</code>, <code>app.validate.basket</code>, <code>app.fraud.detection</code>, <code>app.post.auth</code>, <code>app.basket.taxes</code></td><td>SFRA via <code>hooksHelper</code></td><td>Pontos de extensão do checkout</td></tr>
+<tr><td><code>app.template.beforeHeader</code> / <code>afterFooter</code></td><td><code>page.isml</code> do SFRA</td><td>Injetar tags</td></tr>
+<tr><td><code>app.server.registerRoute</code></td><td>módulo <code>server</code></td><td>Observar ou registrar eventos de toda rota criada</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="configuravel" data-k="cap. 7">
+<h2>Tornando o cartridge configurável e instalável</h2>
+<div class="prose">
+<p>Reutilizável quer dizer que <strong>nada específico de um projeto fica no código</strong>: endpoints, chaves, flags e textos vêm de configuração. O pacote do cartridge deve trazer os metadados para criar essa configuração:</p>
+<script type="text/plain" class="src" data-lang="xml" data-file="int_acme_reviews/metadata/meta/system-objecttype-extensions.xml">
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata xmlns="http://www.demandware.com/xml/impex/metadata/2006-10-31">
+    <type-extension type-id="SitePreferences">
+        <custom-attribute-definitions>
+            <attribute-definition attribute-id="acmeReviewsEnabled">
+                <display-name xml:lang="x-default">ACME Reviews: habilitado</display-name>
+                <type>boolean</type>
+                <default-value>false</default-value>
+            </attribute-definition>
+            <attribute-definition attribute-id="acmeReviewsMaxItems">
+                <display-name xml:lang="x-default">ACME Reviews: máximo de reviews na PDP</display-name>
+                <type>int</type>
+                <default-value>5</default-value>
+            </attribute-definition>
+        </custom-attribute-definitions>
+        <group-definitions>
+            <attribute-group group-id="ACME Reviews">
+                <display-name xml:lang="x-default">ACME Reviews</display-name>
+                <attribute attribute-id="acmeReviewsEnabled"/>
+                <attribute attribute-id="acmeReviewsMaxItems"/>
+            </attribute-group>
+        </group-definitions>
+    </type-extension>
+</metadata>
+</script>
+<p>O grupo de atributos aparece em <em>Merchant Tools &gt; Site Preferences &gt; Custom Preferences &gt; ACME Reviews</em>. Serviços (<code>services.xml</code>), jobs (<code>jobs.xml</code>) e custom objects acompanham o pacote e são importados por Site Import ou <code>b2c job import</code> (<a class="text-link" href="14-business-manager.html">tema 14</a>).</p>
+<h3 id="checklist-reuso">Checklist de um cartridge reutilizável</h3>
+<ul class="check">
+  <li>Nome com prefixo da camada (<code>int_</code>, <code>plugin_</code>, <code>bm_</code>…), único.</li>
+  <li>Nenhum ID de site, URL, credencial ou texto fixo no código (site preferences, Service Credentials, resource bundles).</li>
+  <li>Extensões por <code>module.superModule</code> e hooks; sem cópias do base.</li>
+  <li><code>require('*/…')</code> nos pontos sobrescrevíveis; <code>~/</code> nos internos.</li>
+  <li>Metadados de instalação versionados junto (meta XML, <code>services.xml</code>, <code>jobs.xml</code>).</li>
+  <li>README com o cartridge path esperado, as dependências e os passos de configuração.</li>
+  <li>Testes unitários dos helpers (<a class="text-link" href="16-node-git.html">tema 16</a>).</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="bm" data-k="cap. 8">
+<h2>Cartridges de Business Manager</h2>
+<div class="prose">
+<p>Um cartridge <code>bm_*</code> pode acrescentar ao Business Manager <strong>menu items</strong> (seções), <strong>menu actions</strong> (páginas), <strong>dialog actions</strong> (botões em páginas existentes) e <strong>form extensions</strong> (campos de busca). Tudo é declarado num <code>bm_extensions.xml</code> na raiz de <code>cartridge/</code>, lido na inicialização do servidor a partir dos cartridges do path do Business Manager.</p>
+<script type="text/plain" class="src" data-lang="xml" data-file="bm_acme_tools/cartridge/bm_extensions.xml">
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<extensions xmlns="http://www.demandware.com/xml/bmmodules/2007-12-11"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="http://www.demandware.com/xml/bmmodules/2007-12-11 bmext.xsd">
+
+    <!-- seção nova no menu de um site (site="true"); posições menores aparecem mais acima -->
+    <menuitem id="acme_tools" position="99999" site="true">
+        <name xml:lang="x-default">ACME Tools</name>
+        <short_description xml:lang="x-default">Ferramentas internas da ACME</short_description>
+        <icon>icons/acme.png</icon>
+    </menuitem>
+
+    <!-- página: o "pipeline" AcmeTools é o controller AcmeTools.js; node="Start" é a rota exportada -->
+    <menuaction id="acme_reviews_admin" menupath="acme_tools" position="10" site="true">
+        <name xml:lang="x-default">Moderação de reviews</name>
+        <short_description xml:lang="x-default">Aprovar ou rejeitar reviews pendentes</short_description>
+        <exec pipeline="AcmeTools" node="Start"/>
+        <sub-pipelines>
+            <pipeline name="AcmeTools-Start"/>
+            <pipeline name="AcmeTools-Approve"/>
+        </sub-pipelines>
+        <icon>icons/acme.png</icon>
+    </menuaction>
+
+    <!-- botão na página de detalhes do pedido -->
+    <dialogaction id="acme_resend_order" xp_ref="OrderPage-OrderDetails" position="100">
+        <name xml:lang="x-default">Reenviar ao ERP</name>
+        <exec pipeline="AcmeTools" node="ResendOrder"/>
+        <parameters><parameter name="OrderNo"/></parameters>
+        <menuactions><menuaction-ref action-id="acme_reviews_admin"/></menuactions>
+    </dialogaction>
+</extensions>
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="bm_acme_tools/cartridge/controllers/AcmeTools.js">
+'use strict';
+
+/* Controllers de BM não usam o módulo server do SFRA: exportam funções marcadas como públicas. */
+var ISML = require('dw/template/ISML');
+var CustomObjectMgr = require('dw/object/CustomObjectMgr');
+
+function start() {
+    var pending = CustomObjectMgr.queryCustomObjects('AcmeReview', 'custom.status = {0}', 'creationDate desc', 'PENDING');
+    try {
+        ISML.renderTemplate('extensions/reviewsList', { reviews: pending.asList(0, 50) });
+    } finally {
+        pending.close(); // SeekableIterator sempre fechado
+    }
+}
+start.public = true;
+
+exports.Start = start;
+</script>
+<ol class="steps">
+  <li>Envie o <code>bm_acme_tools</code> para a code version ativa.</li>
+  <li>Adicione-o ao cartridge path do <strong>Business Manager</strong> (<em>Manage Sites &gt; Business Manager &gt; Settings</em>).</li>
+  <li>Dê permissão à role desejada: <em>Administration &gt; Organization &gt; Roles &amp; Permissions &gt; (role) &gt; Business Manager Modules</em> → marque o novo módulo no contexto do site.</li>
+  <li>Se mudar o ID de uma menu action depois de conceder permissões, terá que conceder de novo (a documentação avisa).</li>
+</ol>
+<aside class="callout" data-kind="note">
+<p>Além das extensões, o BM permite customizar <strong>alguns</strong> templates específicos sobrescrevendo-os num cartridge (e-mails e impressões de pedido, como <code>order/printorderinvoice.isml</code>, <code>order/orderemailconfirmation.isml</code>). Só os templates listados na documentação podem ser customizados, e extensões não devem referenciar URLs internas do BM, que mudam sem aviso.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Cartridge "reutilizável" com o ID do site, URL do parceiro ou texto fixo no código.</strong> Configuração vai em preferências, Service Credentials e resource bundles.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Um cartridge por funcionalidade minúscula.</strong> Cartridge path longo é mais difícil de entender e de ordenar. Agrupe pelo critério da documentação: genérico ou grande e autocontido.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Hook de OCAPI que retorna <code>Status.OK</code> "por educação".</strong> Pula a implementação padrão e os hooks seguintes.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Integração colada ao storefront</strong> (lógica de serviço dentro do controller SFRA). Separe o core do adaptador, para servir também jobs, OCAPI/SCAPI e headless.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>"Onde se registra um hook?" → <code>hooks.json</code>, referenciado pela chave <strong><code>hooks</code></strong> no <code>package.json</code> do cartridge.</li>
+  <li>"Dois cartridges registram o mesmo hook" → <strong>os dois</strong> rodam, na ordem do cartridge path.</li>
+  <li>"<code>require('~/…')</code>" → cartridge atual; "<code>require('*/…')</code>" → cartridge path.</li>
+  <li>"Adicionar um item ao menu do BM" → <code>bm_extensions.xml</code> num cartridge no path do <strong>Business Manager</strong> + permissão na role.</li>
+  <li>"Precedência" → a esquerda vence.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>Hook não dispara</td><td><code>package.json</code> do cartridge sem <code>"hooks"</code>; caminho errado no <code>hooks.json</code>; cartridge fora do path; para OCAPI/SCAPI, feature switch de hooks desligado</td><td>Confira os dois arquivos, o path e, para APIs, <em>Global Preferences &gt; Feature Switches</em>.</td></tr>
+<tr><td>Hook dispara duas vezes</td><td>Registrado em dois cartridges</td><td>Todos rodam; remova o duplicado ou trate a idempotência.</td></tr>
+<tr><td>Totais errados depois de criar um hook de OCAPI</td><td>O hook retorna <code>Status.OK</code></td><td>Não retorne nada quando só complementa.</td></tr>
+<tr><td><code>Script not found</code> / <code>module not found</code></td><td><code>~/</code> usado onde o arquivo está em outro cartridge; caminho errado</td><td>Use <code>*/</code> ou o nome do cartridge; confira maiúsculas e minúsculas.</td></tr>
+<tr><td>Menu do BM não aparece</td><td>Cartridge não está no path do Business Manager; sem permissão; XML inválido</td><td>Path do BM, permissões da role, validação do XML contra o <code>bmext.xsd</code>.</td></tr>
+<tr><td>Ação de BM retorna 403</td><td>Nó do controller não listado em <code>sub-pipelines</code> da menu action com permissão</td><td>Liste o nó; endpoints sem checagem de permissão vão numa ação <code>NoPermissionCheck</code>.</td></tr>
+<tr><td>Override do cartridge não vale num site</td><td>O site tem outro cartridge path</td><td>Cada site tem o seu; ajuste todos.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Definir cartridge, genérico × específico, e quando criar um novo.</li>
+  <li>Montar a estrutura de pastas e os arquivos de identificação (<code>.properties</code>, <code>package.json</code> com <code>hooks</code>).</li>
+  <li>Usar as convenções <code>app_</code>, <code>plugin_</code>, <code>int_</code>/<code>link_</code>, <code>bm_</code>, <code>lib_</code> e o padrão core + adaptador.</li>
+  <li>Explicar a precedência do cartridge path para cada tipo de artefato.</li>
+  <li>Dominar <code>require</code>: <code>dw/</code>, <code>*/</code>, <code>~/</code>, relativo, por nome de cartridge, <code>modules</code>.</li>
+  <li>Registrar e chamar hooks, e saber a ordem e o retorno quando há vários.</li>
+  <li>Tornar o cartridge configurável por metadados.</li>
+  <li>Criar extensões do Business Manager com <code>bm_extensions.xml</code>.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Como registrar o hook <code>dw.ocapi.shop.basket.afterPOST</code> num cartridge?</p>
+  <ol class="opts-l"><li>Em <code>bm_extensions.xml</code></li><li>Em <code>hooks.json</code>, referenciado pela chave <code>hooks</code> do <code>package.json</code> do cartridge</li><li>Em <code>steptypes.json</code></li><li>Nas site preferences</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O <code>package.json</code> aponta para o <code>hooks.json</code>, que mapeia o extension point para o módulo.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">O path é <code>int_a:int_b:app_storefront_base</code> e os dois <code>int_</code> registram <code>app.order.created</code>. O que acontece com <code>HookMgr.callHook('app.order.created', 'run', order)</code>?</p>
+  <ol class="opts-l"><li>Só o de <code>int_a</code> roda</li><li>Os dois rodam, <code>int_a</code> e depois <code>int_b</code>; o retorno é o do último</li><li>Erro de conflito</li><li>Só o de <code>int_b</code> roda</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Todos os hooks registrados rodam na ordem do cartridge path, e só o último retorno é devolvido.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Dentro de <code>int_x</code>, qual <code>require</code> garante que o arquivo carregado é o do próprio <code>int_x</code>, mesmo com outro cartridge à esquerda contendo o mesmo caminho?</p>
+  <ol class="opts-l"><li><code>require('*/cartridge/scripts/x')</code></li><li><code>require('~/cartridge/scripts/x')</code></li><li><code>require('x')</code></li><li><code>require('dw/x')</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> <code>~/</code> é relativo ao cartridge atual; <code>*/</code> segue o cartridge path.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Você criou um <code>bm_reports</code> com <code>bm_extensions.xml</code>, mas o menu não aparece. O que falta mais provavelmente?</p>
+  <ol class="opts-l"><li>Adicionar o cartridge ao path do storefront</li><li>Adicionar o cartridge ao path do Business Manager e dar permissão do módulo à role</li><li>Reconstruir o índice</li><li>Replicar para Production</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Extensões de BM vêm dos cartridges do site Business Manager, e a menu action precisa de permissão.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual é a melhor forma de deixar o endpoint de um parceiro configurável num cartridge de integração?</p>
+  <ol class="opts-l"><li>Constante no script</li><li>Service + Credential no BM (Service Framework), com preferências de site para flags</li><li>Resource bundle</li><li>Cookie</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Credenciais e URLs ficam no Service Credential, por instância; o comportamento fica em site preferences.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Por que separar uma integração em <code>int_x_core</code> e <code>int_x_sfra</code>?</p>
+  <ol class="opts-l"><li>Exigência da plataforma</li><li>Para reaproveitar a lógica em jobs, OCAPI/SCAPI e outras arquiteturas de storefront, isolando o que é específico do SFRA</li><li>Para ter mais cartridges no path</li><li>Para evitar o upload</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> É o padrão usado pelos LINK cartridges e por plugins maduros.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-cartridges.html">Cartridges</a>: conceito, WebDAV, download, registro no site.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/usingjavascriptmodules.html">B2C Commerce Script Modules</a>: regras do <code>require</code>.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-sfra-hooks.html">SFRA Hooks</a>: hooks.json, vários cartridges, ordem.</li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/scriptapi/html/index.html?target=class_dw_system_HookMgr.html">Script API: HookMgr</a></li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-customize-business-manager.html">Customize Business Manager</a>: menu items, menu actions, dialog actions, form extensions, templates customizáveis.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-sfra-features-and-comps.html">SFRA Features and Components</a>: camadas custom/LINK/plugin/base.</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

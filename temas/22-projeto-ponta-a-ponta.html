@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>22 · Projeto ponta a ponta · Guia SFCC</title>
+<meta name="description" content="Projetar, descobrir requisitos e construir um site B2C Commerce: discovery e fit-gap, desenho da solução (sites, catálogos, cartridges, integrações, dados, cache), setup, uma feature completa (avise-me quando chegar) costurando metadados, form, controller, ISML, custom object, job, e-mail, testes e logs, e o checklist de go-live.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="22" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Projeto ponta a ponta</h1>
+  <p class="lead">Este é o tema de síntese. O guia do exame espera que você saiba <strong>projetar, descobrir requisitos e construir</strong> um site com o B2C Commerce, ou seja, que consiga juntar o que viu nos temas anteriores. A página segue o ciclo de um projeto real (discovery, desenho, setup, construção, qualidade e go-live) e implementa uma feature completa, do metadado ao job, com links para o tema que aprofunda cada peça.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>Discovery</dt><dd>Fase de levantar requisitos de negócio e técnicos e confrontá-los com o que a plataforma e o SFRA já oferecem.</dd>
+  <dt>Fit-gap</dt><dd>Para cada requisito: <em>fit</em> (nativo, só configurar), <em>config+</em> (nativo com dados ou metadados) ou <em>gap</em> (exige código ou integração). Gaps viram histórias técnicas.</dd>
+  <dt>Solution design</dt><dd>Documento com a topologia de sites, catálogos e price books, a arquitetura de cartridges, o mapa de integrações (síncronas e assíncronas), o modelo de dados (atributos, custom objects), a estratégia de cache, os ambientes e o pipeline.</dd>
+  <dt>Go-live</dt><dd>Lançamento em produção: dados e código replicados, configuração por instância, testes de carga, monitoramento e plano de rollback.</dd>
+</dl>
+<script type="text/plain" class="mmd" data-caption="ciclo do projeto e temas relacionados">
+flowchart LR
+  D["Discovery<br/>fit-gap"] --> S["Solution design<br/>temas 01, 02, 07, 13, 19, 20"]
+  S --> SU["Setup<br/>temas 05, 14, 15, 16"]
+  SU --> B["Build em sprints<br/>temas 06, 08–12, 17, 18"]
+  B --> Q["Qualidade<br/>testes, performance, temas 16, 20, 21"]
+  Q --> G["Go-live<br/>replicação, monitoramento"]
+  G --> O["Operação<br/>jobs, logs, releases"]
+  O -->|"novas features"| B
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="discovery" data-k="cap. 2">
+<h2>Discovery: perguntas que definem a arquitetura</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Área</th><th>Perguntas</th><th>Decide</th></tr></thead>
+<tbody>
+<tr><td>Mercados</td><td>Quantos países, idiomas e moedas? Preços e sortimento diferentes por país?</td><td>Sites × locales; price books por moeda; storefront catalogs (<a class="text-link" href="14-business-manager.html#locales">tema 14</a>, <a class="text-link" href="02-catalogo-precos-inventario.html">tema 02</a>)</td></tr>
+<tr><td>Catálogo</td><td>Quem é o dono dos dados (PIM ou ERP)? Variações, bundles, sets? Volume de SKUs e frequência de atualização?</td><td>Master × storefront catalog; feeds e jobs (<a class="text-link" href="18-jobs.html">tema 18</a>)</td></tr>
+<tr><td>Preço, promoção e estoque</td><td>Preço por grupo de cliente? Cupons? Estoque em tempo real ou em feed? Retirada em loja?</td><td>Price books, campanhas, inventory lists (<a class="text-link" href="03-promocoes-carrinho-checkout.html">tema 03</a>)</td></tr>
+<tr><td>Checkout</td><td>Quais PSPs, antifraude, impostos e frete? Pagamento síncrono?</td><td>Integrações síncronas com fallback (<a class="text-link" href="19-integracoes.html">tema 19</a>)</td></tr>
+<tr><td>Pós-venda</td><td>OMS e ERP: quem recebe os pedidos e com que latência? Status de volta para o site?</td><td>Export de pedidos ou API (<a class="text-link" href="17-ocapi.html">tema 17</a>)</td></tr>
+<tr><td>Conteúdo</td><td>Quem edita as páginas? Quanta autonomia o merchant precisa?</td><td>Page Designer × slots × assets (<a class="text-link" href="11-slots-page-designer.html">tema 11</a>)</td></tr>
+<tr><td>Front</td><td>SFRA (server-side) ou headless (Composable Storefront + SCAPI)?</td><td>Toda a stack de desenvolvimento</td></tr>
+<tr><td>Não funcionais</td><td>Picos esperados (Black Friday)? SLAs? Requisitos legais (consentimento, LGPD)?</td><td>Cache, quotas, teste de carga, consentimento (<a class="text-link" href="20-performance.html">tema 20</a>)</td></tr>
+</tbody>
+</table>
+<aside class="callout" data-kind="best">
+<p>Regra de ouro do fit-gap: <strong>configure antes de customizar</strong>. Promoções, sorting rules, slots, Page Designer, preferências e jobs padrão resolvem muito sem código. Quando customizar, estenda o SFRA num cartridge próprio e nunca edite o base (<a class="text-link" href="06-estender-sfra.html#decidir">tema 06</a>).</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="design" data-k="cap. 3">
+<h2>Desenho da solução</h2>
+<div class="prose">
+<h3 id="cartridges-path">Cartridges e cartridge path</h3>
+<script type="text/plain" class="src" data-lang="text" data-file="cartridge path do site AcmeBR (esquerda tem precedência)">
+app_custom_acme:int_acme_backinstock:int_acme_payment:int_acme_oms:plugin_wishlists:app_storefront_base
+
+# Business Manager:
+bm_acme_tools:int_acme_oms
+</script>
+<ul>
+  <li><strong><code>app_custom_acme</code></strong>: a marca (controllers estendidos, templates, SCSS e JS, models). Um por marca, ou por site se as diferenças forem grandes.</li>
+  <li><strong><code>int_*</code></strong>: uma integração por cartridge (serviços, hooks, jobs), reutilizável entre sites.</li>
+  <li><strong><code>plugin_*</code></strong>: plugins do SFRA (LINK cartridges ou plugins oficiais) entre o custom e o base.</li>
+  <li><strong><code>bm_*</code></strong>: extensões do Business Manager.</li>
+</ul>
+<h3 id="dados-modelo">Modelo de dados</h3>
+<ul>
+  <li>Atributo de <strong>objeto de sistema</strong> quando o dado pertence a uma entidade existente (produto, perfil, pedido).</li>
+  <li><strong>Custom object</strong> para entidades próprias: replicável para configuração editada em Staging, não replicável para dados criados no storefront (<a class="text-link" href="13-custom-objects.html#decidir">tema 13</a>).</li>
+  <li><strong>Site preferences custom</strong> para chaves de configuração (liga e desliga features, limites) com valor por instância (<a class="text-link" href="14-business-manager.html#preferencias">tema 14</a>).</li>
+</ul>
+<h3 id="mapa-integracoes">Integrações, cache e ambientes</h3>
+<ul>
+  <li><strong>Integrações</strong>: classifique cada uma como síncrona ou assíncrona, com o serviço e o profile correspondentes, e defina o plano B se ela falhar.</li>
+  <li><strong>Cache</strong>: política por rota (Home, PLP e PDP cacheadas; carrinho, conta e checkout não) e remote includes para os fragmentos pessoais.</li>
+  <li><strong>Ambientes</strong>: uma sandbox por desenvolvedor e uma de integração, depois Development → Staging (dados) → Production. Code versions por release, CI e CD (<a class="text-link" href="16-node-git.html#ci">tema 16</a>, <a class="text-link" href="01-arquitetura.html#instancias">tema 01</a>).</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="setup" data-k="cap. 4">
+<h2>Setup do projeto</h2>
+<div class="prose">
+<ol class="steps">
+  <li><strong>Repositório</strong>: estrutura com <code>cartridges/</code>, <code>metadata/</code> e <code>test/</code>; <code>.gitignore</code> com <code>dw.json</code>; Node fixado (<a class="text-link" href="16-node-git.html#git">tema 16</a>).</li>
+  <li><strong>Sandbox</strong>: SFRA na tag certa, <code>npm install</code>, <code>npm run build</code>, upload e import do site de dados do RefArch para referência (<a class="text-link" href="05-instalar-sfra.html">tema 05</a>).</li>
+  <li><strong>Site do projeto</strong>: criado no BM ou via site import (<code>metadata/sites/AcmeBR</code>), com locales, moedas, catálogos e price books atribuídos, e o cartridge path (<a class="text-link" href="14-business-manager.html#setup">tema 14</a>).</li>
+  <li><strong>IDE</strong>: <code>dw.json</code> apontando para a sua sandbox e a code version de trabalho, debugger configurado (<a class="text-link" href="15-ide-deploy.html#config">tema 15</a>).</li>
+  <li><strong>Pipeline</strong>: lint, testes, build e deploy na sandbox de integração a cada merge.</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="feature" data-k="cap. 5">
+<h2>Uma feature completa: "Avise-me quando chegar"</h2>
+<div class="prose">
+<p><strong>Requisito</strong>: na PDP de um produto sem estoque, o comprador informa o e-mail. Quando o produto voltar, ele recebe um aviso. <strong>Fit-gap</strong>: não existe nativamente, então é um gap com código, mas montado só com peças padrão: metadados, form, controller, ISML, custom object, job e e-mail.</p>
+<script type="text/plain" class="mmd" data-caption="fluxo da feature e onde cada peça está">
+sequenceDiagram
+  participant B as Navegador (PDP cacheada)
+  participant RI as BackInStock-Form (remote include, sem cache)
+  participant C as BackInStock-Subscribe (POST AJAX)
+  participant CO as Custom object BackInStockRequest
+  participant J as Job custom.AcmeBackInStockNotify
+  participant M as dw.net.Mail
+  B->>RI: carrega o form (token CSRF novo)
+  B->>C: e-mail + pid + csrf_token
+  C->>C: valida form, CSRF, produto, limite
+  C->>CO: cria (Transaction.wrap)
+  C-->>B: JSON { success, msg }
+  J->>CO: lê os PENDING (chunk)
+  J->>J: produto voltou? (ATS > 0)
+  J->>M: envia o e-mail (template ISML)
+  J->>CO: remove ou marca NOTIFIED
+</script>
+<h3 id="f-metadados">1. Metadados (versionados e importados no deploy)</h3>
+<p>O custom object <code>BackInStockRequest</code> (não replicável, escopo de site, retenção de 90 dias) está definido no <a class="text-link" href="13-custom-objects.html#caso">tema 13</a>. Somamos uma preferência de site para ligar e desligar a feature:</p>
+<script type="text/plain" class="src" data-lang="xml" data-file="metadata/meta/system-objecttype-extensions.xml">
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata xmlns="http://www.demandware.com/xml/impex/metadata/2006-10-31">
+    <type-extension type-id="SitePreferences">
+        <custom-attribute-definitions>
+            <attribute-definition attribute-id="acmeBackInStockEnabled">
+                <display-name xml:lang="x-default">Avise-me quando chegar: ativo</display-name>
+                <type>boolean</type>
+                <mandatory-flag>false</mandatory-flag>
+                <default-value>false</default-value>
+            </attribute-definition>
+        </custom-attribute-definitions>
+        <group-definitions>
+            <attribute-group group-id="AcmeFeatures">
+                <display-name xml:lang="x-default">Acme: features</display-name>
+                <attribute attribute-id="acmeBackInStockEnabled"/>
+            </attribute-group>
+        </group-definitions>
+    </type-extension>
+</metadata>
+</script>
+<h3 id="f-form">2. Form e textos</h3>
+<script type="text/plain" class="src" data-lang="xml" data-file="int_acme_backinstock/cartridge/forms/default/backInStock.xml">
+<?xml version="1.0"?>
+<form xmlns="http://www.demandware.com/xml/form/2008-04-19">
+    <field formid="email" label="label.backinstock.email" type="string" mandatory="true"
+           regexp="^[\w.%+-]+@[\w.-]+\.[\w]{2,6}$" max-length="50"
+           missing-error="error.backinstock.email.missing" parse-error="error.backinstock.email.invalid"/>
+    <field formid="pid" type="string" mandatory="true"/>
+</form>
+</script>
+<script type="text/plain" class="src" data-lang="text" data-file="int_acme_backinstock/cartridge/templates/resources/backinstock.properties">
+label.backinstock.title=Avise-me quando chegar
+label.backinstock.email=Seu e-mail
+button.backinstock.submit=Quero ser avisado
+msg.backinstock.success=Pronto! Avisaremos {0} quando o produto voltar.
+error.backinstock.email.missing=Informe o e-mail.
+error.backinstock.email.invalid=E-mail inválido.
+error.backinstock.generic=Não foi possível registrar agora. Tente novamente.
+mail.backinstock.subject={0} voltou ao estoque
+</script>
+<h3 id="f-controller">3. Controller</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="int_acme_backinstock/cartridge/controllers/BackInStock.js">
+'use strict';
+
+var server = require('server');
+var csrfProtection = require('*/cartridge/scripts/middleware/csrf');
+
+/**
+ * BackInStock-Form: fragmento renderizado por remote include na PDP (que fica em cache).
+ * Sem middleware de cache: o token CSRF precisa ser novo para cada sessão.
+ */
+server.get('Form', server.middleware.include, csrfProtection.generateToken, function (req, res, next) {
+    var Site = require('dw/system/Site');
+    var form = server.forms.getForm('backInStock');
+    form.clear();
+    form.pid.value = req.querystring.pid;
+
+    res.render('backinstock/form', {
+        enabled: !!Site.current.getCustomPreferenceValue('acmeBackInStockEnabled'),
+        backInStockForm: form
+    });
+    next();
+});
+
+/**
+ * BackInStock-Subscribe: recebe o form via AJAX e grava o pedido de aviso.
+ */
+server.post('Subscribe', server.middleware.https, csrfProtection.validateAjaxRequest, function (req, res, next) {
+    var Resource = require('dw/web/Resource');
+    var backInStock = require('*/cartridge/scripts/backInStock/backInStockHelpers');
+    var form = server.forms.getForm('backInStock');
+
+    if (!form.valid) {
+        res.setStatusCode(400);
+        res.json({ success: false, fields: require('*/cartridge/scripts/formErrors').getFormErrors(form) });
+        return next();
+    }
+
+    var result = backInStock.subscribe(form.pid.value, form.email.value);
+    res.json(result.ok
+        ? { success: true, msg: Resource.msgf('msg.backinstock.success', 'backinstock', null, form.email.value) }
+        : { success: false, msg: Resource.msg('error.backinstock.generic', 'backinstock', null) });
+    return next();
+});
+
+module.exports = server.exports();
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="int_acme_backinstock/cartridge/scripts/backInStock/backInStockHelpers.js">
+'use strict';
+
+var CustomObjectMgr = require('dw/object/CustomObjectMgr');
+var ProductMgr = require('dw/catalog/ProductMgr');
+var Transaction = require('dw/system/Transaction');
+var Logger = require('dw/system/Logger').getLogger('backinstock', 'subscribe');
+
+var TYPE = 'BackInStockRequest';
+
+/**
+ * Chave determinística: o mesmo e-mail e produto não duplicam (idempotente).
+ * @param {string} pid - produto
+ * @param {string} email - e-mail
+ * @returns {string} chave
+ */
+function keyFor(pid, email) {
+    var Bytes = require('dw/util/Bytes');
+    var MessageDigest = require('dw/crypto/MessageDigest');
+    var Encoding = require('dw/crypto/Encoding');
+    var digest = new MessageDigest(MessageDigest.DIGEST_SHA_256).digestBytes(new Bytes(pid + '|' + email.toLowerCase()));
+    return Encoding.toHex(digest).substring(0, 40);
+}
+
+/**
+ * Registra o interesse. Valida o produto e evita duplicados.
+ * @param {string} pid - ID do produto
+ * @param {string} email - e-mail do comprador
+ * @returns {{ok: boolean}} resultado
+ */
+function subscribe(pid, email) {
+    var product = ProductMgr.getProduct(pid);
+    if (!product || !product.online) {
+        return { ok: false };
+    }
+    var key = keyFor(pid, email);
+    try {
+        Transaction.wrap(function () {
+            if (!CustomObjectMgr.getCustomObject(TYPE, key)) {
+                var co = CustomObjectMgr.createCustomObject(TYPE, key);
+                co.custom.productId = pid;
+                co.custom.email = email;
+                co.custom.status = 'PENDING';
+            }
+        });
+        return { ok: true };
+    } catch (e) {
+        Logger.error('Falha ao registrar {0}: {1}', pid, e.message); // sem logar o e-mail
+        return { ok: false };
+    }
+}
+
+module.exports = { subscribe: subscribe, keyFor: keyFor, TYPE: TYPE };
+</script>
+<h3 id="f-isml">4. Templates</h3>
+<script type="text/plain" class="src" data-lang="isml" data-file="int_acme_backinstock/cartridge/templates/default/backinstock/form.isml">
+<isif condition="${pdict.enabled}">
+    <form class="back-in-stock" action="${URLUtils.url('BackInStock-Subscribe')}" method="POST"
+          name="${pdict.backInStockForm.htmlName}" data-back-in-stock>
+        <h3>${Resource.msg('label.backinstock.title', 'backinstock', null)}</h3>
+        <label for="bis-email">${Resource.msg('label.backinstock.email', 'backinstock', null)}</label>
+        <input type="email" id="bis-email" required
+               name="${pdict.backInStockForm.email.htmlName}" autocomplete="email"/>
+        <input type="hidden" name="${pdict.backInStockForm.pid.htmlName}" value="${pdict.backInStockForm.pid.value}"/>
+        <input type="hidden" name="${pdict.csrf.tokenName}" value="${pdict.csrf.token}"/>
+        <button type="submit" class="btn btn-outline-primary">
+            ${Resource.msg('button.backinstock.submit', 'backinstock', null)}
+        </button>
+        <p class="back-in-stock-msg" role="status" aria-live="polite"></p>
+    </form>
+</isif>
+</script>
+<script type="text/plain" class="src" data-lang="isml" data-file="app_custom_acme/cartridge/templates/default/product/components/addToCartProduct.isml (trecho)">
+<isif condition="${!product.available}">
+    <isinclude url="${URLUtils.url('BackInStock-Form', 'pid', product.id)}"/>
+</isif>
+</script>
+<aside class="callout" data-kind="warn">
+<p>A PDP é cacheada por 24 h (<code>applyPromotionSensitiveCache</code>). Um token CSRF renderizado direto na PDP seria o mesmo para todos e falharia na validação. Por isso o form vem por <strong>remote include sem cache</strong> (<a class="text-link" href="20-performance.html#remote-includes">tema 20</a>, <a class="text-link" href="12-forms.html#csrf">tema 12</a>). E como a disponibilidade da PDP vem do cache, o próprio <code>isif</code> respeita o TTL da página.</p>
+</aside>
+<h3 id="f-client">5. JavaScript de cliente</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="int_acme_backinstock/cartridge/client/default/js/backInStock.js">
+'use strict';
+
+module.exports = function () {
+    $(document).on('submit', '[data-back-in-stock]', function (e) {
+        e.preventDefault();
+        var $form = $(this);
+        var $msg = $form.find('.back-in-stock-msg');
+        $.ajax({
+            url: $form.attr('action'),
+            type: 'post',
+            dataType: 'json',
+            data: $form.serialize()
+        }).done(function (data) {
+            $msg.text(data.msg || '');
+            if (data.success) { $form.find('button').prop('disabled', true); }
+        }).fail(function (xhr) {
+            var data = xhr.responseJSON || {};
+            $msg.text(data.msg || (data.fields && Object.values(data.fields)[0]) || '');
+        });
+    });
+};
+</script>
+<h3 id="f-job">6. Job de notificação (chunk)</h3>
+<script type="text/plain" class="src" data-lang="json" data-file="int_acme_backinstock/steptypes.json">
+{
+  "step-types": {
+    "chunk-script-module-step": [
+      {
+        "@type-id": "custom.AcmeBackInStockNotify",
+        "@supports-parallel-execution": "false",
+        "@supports-site-context": "true",
+        "@supports-organization-context": "false",
+        "description": "Avisa compradores quando o produto volta ao estoque",
+        "module": "int_acme_backinstock/cartridge/scripts/steps/notifyBackInStock.js",
+        "before-step-function": "beforeStep",
+        "total-count-function": "getTotalCount",
+        "read-function": "read",
+        "process-function": "process",
+        "write-function": "write",
+        "after-step-function": "afterStep",
+        "chunk-size": 50,
+        "transactional": "false",
+        "parameters": {
+          "parameter": [
+            { "@name": "FromEmail", "@type": "string", "@required": "true", "description": "Remetente" }
+          ]
+        }
+      }
+    ]
+  }
+}
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="int_acme_backinstock/cartridge/scripts/steps/notifyBackInStock.js">
+'use strict';
+
+var CustomObjectMgr = require('dw/object/CustomObjectMgr');
+var ProductMgr = require('dw/catalog/ProductMgr');
+var Transaction = require('dw/system/Transaction');
+var Resource = require('dw/web/Resource');
+var Logger = require('dw/system/Logger').getLogger('backinstock', 'notify');
+
+var requests;
+var from;
+
+exports.beforeStep = function (parameters) {
+    from = parameters.FromEmail;
+    requests = CustomObjectMgr.queryCustomObjects('BackInStockRequest', 'custom.status = {0}', 'creationDate asc', 'PENDING');
+};
+
+exports.getTotalCount = function () { return requests.count; };
+
+exports.read = function () { return requests.hasNext() ? requests.next() : undefined; };
+
+exports.process = function (co) {
+    var product = ProductMgr.getProduct(co.custom.productId);
+    if (!product || !product.online) {
+        return { co: co, action: 'remove' };            // produto saiu do catálogo
+    }
+    var record = product.availabilityModel.inventoryRecord;
+    if (record && record.ATS.value > 0) {
+        return { co: co, action: 'notify', product: { id: product.ID, name: product.name } };
+    }
+    return undefined;                                   // continua PENDING; não vai para o write
+};
+
+exports.write = function (items) {
+    var emailHelpers = require('*/cartridge/scripts/helpers/emailHelpers');
+    var URLUtils = require('dw/web/URLUtils');
+
+    for (var i = 0; i < items.size(); i++) {
+        var item = items.get(i);
+        if (item.action === 'notify') {
+            try {
+                emailHelpers.send({
+                    to: item.co.custom.email,
+                    from: from,
+                    subject: Resource.msgf('mail.backinstock.subject', 'backinstock', null, item.product.name)
+                }, 'backinstock/email', {
+                    productName: item.product.name,
+                    url: URLUtils.https('Product-Show', 'pid', item.product.id).toString()
+                });
+            } catch (e) {
+                Logger.error('E-mail falhou para o produto {0}: {1}', item.product.id, e.message);
+                continue;                               // tenta de novo na próxima execução
+            }
+        }
+        Transaction.wrap(function () {
+            CustomObjectMgr.remove(item.co);            // notificado ou obsoleto
+        });
+    }
+};
+
+exports.afterStep = function () { if (requests) { requests.close(); } };
+</script>
+<p>No BM: job <code>acme-backinstock</code> com flow de escopo <em>Specific Sites</em>, o step <code>custom.AcmeBackInStockNotify</code> e agenda de hora em hora, depois do job de import de estoque (<a class="text-link" href="18-jobs.html#custom-steps">tema 18</a>).</p>
+<h3 id="f-testes">7. Teste unitário</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="test/unit/int_acme_backinstock/backInStockHelpers.js">
+'use strict';
+
+var assert = require('chai').assert;
+var proxyquire = require('proxyquire').noCallThru().noPreserveCache();
+
+describe('backInStockHelpers.subscribe', function () {
+    var store;
+    var helpers;
+
+    beforeEach(function () {
+        store = {};
+        helpers = proxyquire('../../../cartridges/int_acme_backinstock/cartridge/scripts/backInStock/backInStockHelpers', {
+            'dw/object/CustomObjectMgr': {
+                getCustomObject: function (type, key) { return store[key] || null; },
+                createCustomObject: function (type, key) { store[key] = { custom: {} }; return store[key]; }
+            },
+            'dw/catalog/ProductMgr': {
+                getProduct: function (pid) { return pid === 'OFF' ? { online: false } : { online: true }; }
+            },
+            'dw/system/Transaction': { wrap: function (cb) { return cb(); } },
+            'dw/system/Logger': { getLogger: function () { return { error: function () {} }; } },
+            'dw/util/Bytes': function (s) { this.s = s; },
+            'dw/crypto/MessageDigest': Object.assign(function () {
+                this.digestBytes = function (b) { return b.s; };
+            }, { DIGEST_SHA_256: 'SHA-256' }),
+            'dw/crypto/Encoding': { toHex: function (s) { return Buffer.from(s).toString('hex'); } }
+        });
+    });
+
+    it('cria um pedido PENDING', function () {
+        assert.isTrue(helpers.subscribe('P1', 'Ana@Example.com').ok);
+        var created = store[Object.keys(store)[0]];
+        assert.equal(created.custom.status, 'PENDING');
+    });
+
+    it('não duplica o mesmo e-mail e produto (case-insensitive)', function () {
+        helpers.subscribe('P1', 'ana@example.com');
+        helpers.subscribe('P1', 'ANA@example.com');
+        assert.lengthOf(Object.keys(store), 1);
+    });
+
+    it('recusa produto offline', function () {
+        assert.isFalse(helpers.subscribe('OFF', 'ana@example.com').ok);
+    });
+});
+</script>
+<h3 id="f-revisao">8. Revisão da feature contra os temas</h3>
+<table>
+<thead><tr><th>Critério</th><th>Como a feature atende</th></tr></thead>
+<tbody>
+<tr><td>Base intocado, extensão limpa</td><td>Tudo em <code>int_acme_backinstock</code> + um include no template do cartridge da marca</td></tr>
+<tr><td>Segurança</td><td>CSRF, HTTPS, validação do form, e-mail não logado, encoding padrão no ISML</td></tr>
+<tr><td>Escrita no storefront</td><td>CO não replicável, <code>Transaction.wrap</code>, uma criação por requisição (bem abaixo da quota de 10)</td></tr>
+<tr><td>Performance</td><td>PDP continua cacheada; o form vem em remote include; o envio é assíncrono por job</td></tr>
+<tr><td>Operação</td><td>Preferência para ligar e desligar, retenção de 90 dias, logs por categoria, job idempotente</td></tr>
+<tr><td>Qualidade</td><td>Testes unitários com proxyquire; lint e build no CI</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="qualidade" data-k="cap. 6">
+<h2>Qualidade antes do lançamento</h2>
+<div class="prose">
+<ul class="check">
+  <li><strong>Funcional</strong>: fluxos críticos E2E (busca → PDP → carrinho → checkout → pedido), em cada locale e moeda, com promoções e cupons.</li>
+  <li><strong>Teste de carga</strong> agendado com a Salesforce, com perfil de tráfego realista e cache aquecido. Meça o hit ratio por controller (≥ 70%).</li>
+  <li><strong>Quota Status</strong> limpo em Staging; <strong>Deprecated API Usage</strong> revisado.</li>
+  <li><strong>Service Status</strong> e timeouts revisados para cada integração; fallbacks testados com o serviço desligado ou em mock.</li>
+  <li><strong>Segurança</strong>: sem segredos no código; CSRF em todo POST; encoding; rate limit e CAPTCHA em formulários públicos.</li>
+  <li><strong>Acessibilidade e SEO</strong>: URLs amigáveis (URL rules), redirects do site antigo, sitemap (<code>CreateSitemap</code>), robots.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="go-live" data-k="cap. 7">
+<h2>Checklist de go-live</h2>
+<div class="prose">
+<ol class="steps">
+  <li><strong>Código</strong>: code version de release em Staging, replicada para Production (code replication) e ativada. A versão anterior fica disponível para rollback.</li>
+  <li><strong>Dados</strong>: catálogos, preços, estoque, conteúdo, promoções, slots e Page Designer editados em Staging e <strong>replicados</strong> (data replication por grupos).</li>
+  <li><strong>Configuração por instância</strong> (não replicada): credenciais de serviço, chaves e certificados, preferências com valores de produção, OCAPI/SCAPI clients, aliases e hostnames, eCDN e certificados TLS.</li>
+  <li><strong>Jobs</strong>: agendas de produção (imports, export de pedidos, reindex, limpeza) habilitadas e testadas.</li>
+  <li><strong>Monitoramento</strong>: alertas no Log Center (erros, serviços, quotas), notificações de jobs e dashboards.</li>
+  <li><strong>Plano de rollback</strong>: code version anterior, replicação Undo, feature flags (preferências) para desligar features novas.</li>
+  <li><strong>Hypercare</strong>: logs e Service Status acompanhados de perto nos primeiros dias; ciclo de correções curto.</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Customizar antes de configurar</strong>: código para algo que promoções, slots ou preferências resolvem.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Um cartridge monolítico</strong> com marca e integrações misturadas: impede o reuso entre sites e trava upgrades.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Editar dados em Production</strong> que deveriam vir de Staging: a próxima replicação sobrescreve tudo.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Esquecer a configuração por instância</strong> (credenciais, preferências): o site funciona em Staging e falha em Production.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>Discovery → fit-gap: <strong>nativo primeiro</strong>, gaps em cartridges próprios.</li>
+  <li>Dados editáveis pelo merchant: em <strong>Staging</strong>, depois replicação. Dados de comprador nascem em <strong>Production</strong>.</li>
+  <li>Integração sem necessidade de resposta imediata → <strong>assíncrona</strong>.</li>
+  <li>PDP cacheada + parte pessoal → <strong>remote include</strong>.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting da feature</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>Form não aparece na PDP</td><td>Preferência desligada; produto disponível no cache da página; cartridge fora do path</td><td>BM Preferences; Cache Info; cartridge path.</td></tr>
+<tr><td>POST retorna erro de CSRF</td><td>Token cacheado (form renderizado na PDP em vez de remote include)</td><td>Remote include sem cache.</td></tr>
+<tr><td>Erro ao criar o custom object no storefront</td><td>Tipo configurado como replicável (<code>source-to-target</code>)</td><td>Use <code>no-staging</code> (<a class="text-link" href="13-custom-objects.html#replicacao">tema 13</a>).</td></tr>
+<tr><td>E-mails não saem</td><td>Job não agendado ou com escopo errado; produto sem inventory record; e-mail bloqueado</td><td>Job history; customerror; inventory list do site.</td></tr>
+<tr><td>Avisos duplicados</td><td>Chave não determinística; job rodando em paralelo</td><td><code>keyFor</code>; <code>@supports-parallel-execution: false</code>; recurso bloqueado.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Conduzir o discovery e classificar requisitos em fit, config+ ou gap.</li>
+  <li>Desenhar sites, catálogos, cartridges, dados, integrações, cache e ambientes.</li>
+  <li>Configurar o projeto (repositório, sandbox, site, IDE, CI).</li>
+  <li>Implementar uma feature completa usando as peças padrão do SFRA e da plataforma.</li>
+  <li>Validar qualidade, performance e segurança, e conduzir o go-live com rollback e monitoramento.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">O cliente quer "frete grátis acima de R$ 300 para clientes VIP". O que fazer primeiro?</p>
+  <ol class="opts-l"><li>Um hook de cálculo custom</li><li>Configurar uma promoção de frete com qualificador de customer group</li><li>Uma integração com o ERP</li><li>Um custom object</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> É fit nativo: configure antes de customizar.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Um formulário com CSRF precisa aparecer numa PDP cacheada por 24 h. Como implementar?</p>
+  <ol class="opts-l"><li>Desligar o cache da PDP</li><li>Renderizar o form num remote include sem cache que gera o token</li><li>Remover o CSRF</li><li>Guardar o token em custom cache</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong></p></div></details>
+</li>
+<li>
+  <p class="drill-q">Os pedidos de aviso são criados pelos compradores. Qual configuração de custom object?</p>
+  <ol class="opts-l"><li>Replicável, escopo global</li><li>Não replicável (<code>no-staging</code>), escopo de site, com retenção</li><li>Atributo em Product</li><li>Site preference</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Objetos replicáveis são somente leitura no storefront.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Tudo funciona em Staging, mas em Production o pagamento falha com 401. Causa mais provável?</p>
+  <ol class="opts-l"><li>Código diferente</li><li>Credencial do serviço não configurada em Production (configuração por instância)</li><li>Cache</li><li>Índice</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Credenciais, chaves e certificados são configurados em cada instância.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual organização de cartridges favorece o reuso de uma integração de pagamento em três sites?</p>
+  <ol class="opts-l"><li>Código no <code>app_storefront_base</code></li><li>Um <code>int_acme_payment</code> no path dos três sites, à esquerda do base</li><li>Copiar o código em cada <code>app_custom_*</code></li><li>Um controller global</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong></p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-customizing-sfra.html">Customize SFRA</a> e <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-dev-best-practices.html">Development Best Practices</a></li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-code-deployment.html">Code Deployment</a> e replicação de dados (Help: <em>Data Replication</em>)</li>
+  <li>Knowledge: <em>Holiday Readiness Checklist</em> (índice dos checklists de cache, código, serviços)</li>
+  <li>Código do SFRA: <code>controllers/EmailSubscribe.js</code>, <code>scripts/helpers/emailHelpers.js</code>, <code>scripts/middleware/csrf.js</code></li>
+  <li>Os temas 01 a 21 deste guia, nas seções referenciadas.</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

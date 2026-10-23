@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>16 · Node e Git no fluxo SFCC · Guia SFCC</title>
+<meta name="description" content="Node.js e Git num projeto B2C Commerce: papel do Node (só tooling), scripts npm do SFRA, webpack via sgmf-scripts, lint, testes unitários com mocha, chai, sinon e proxyquire, testes de integração, estrutura de repositório, .gitignore, branches, versionamento e pipeline de CI/CD com a GitHub Action oficial do B2C CLI.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="16" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Node e Git no fluxo SFCC</h1>
+  <p class="lead">O storefront não roda em Node, mas todo o resto do trabalho do desenvolvedor passa por ele: dependências, build de JS e SCSS, lint, testes unitários, upload e automação de deploy. E o Git é a fonte da verdade do código e da configuração versionável (metadados, preferências, jobs). Este tema mostra como os dois se encaixam num projeto B2C Commerce profissional, do <code>npm install</code> ao pipeline que publica uma code version em Staging.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>Node.js no SFCC</dt><dd>Ambiente local e de CI para ferramentas. A documentação do SFRA é clara: <em>"B2C Commerce uses Node.js only for npm dependency management."</em> O servidor executa o motor de script da plataforma.</dd>
+  <dt>package.json (raiz)</dt><dd>Scripts npm, dependências de build e teste e, no SFRA, <code>paths</code> para outros cartridges.</dd>
+  <dt>sgmf-scripts</dt><dd>CLI que encapsula webpack (JS e SCSS), ESLint, Stylelint, mocha e dwupload.</dd>
+  <dt>proxyquire</dt><dd>Biblioteca que substitui os <code>require</code> de um módulo por mocks, para testar scripts que dependem de <code>dw/*</code> fora do servidor.</dd>
+  <dt>Code version de release</dt><dd>Nome da pasta de código gerado no CI (ex.: <code>release-2026-11-04-1530</code>), que liga um commit do Git ao que está rodando.</dd>
+</dl>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="node" data-k="cap. 2">
+<h2>Node e npm no projeto</h2>
+<div class="prose">
+<ul>
+  <li><strong>Versão</strong>: a documentação do SFRA cita o Node 18 como testado; a GitHub Action oficial do B2C CLI usa o Node 22 por padrão. Fixe a versão do projeto num <code>.nvmrc</code> (ou no campo <code>engines</code>) e use a mesma no CI.</li>
+  <li><strong><code>npm install</code> × <code>npm ci</code></strong>: <code>install</code> resolve e pode atualizar o lockfile (uso local); <code>ci</code> instala exatamente o <code>package-lock.json</code> (uso no CI, builds reprodutíveis).</li>
+  <li><strong>Rode <code>npm install</code> a cada versão nova do SFRA</strong>: as dependências do base mudam entre versões.</li>
+  <li>Nenhum pacote npm vai para o servidor. Uma biblioteca que você quer usar <strong>no servidor</strong> precisa ser compatível com o motor da plataforma e ser copiada para dentro de um cartridge, como módulo CommonJS.</li>
+</ul>
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal">
+nvm install 18 && nvm use 18      # ou a versão definida no .nvmrc do projeto
+node -v && npm -v
+npm ci                            # instala exatamente o lockfile
+npm run build                     # compile:js + compile:fonts + compile:scss
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="scripts" data-k="cap. 3">
+<h2>Os scripts npm de um projeto SFRA</h2>
+<div class="prose">
+<p>Scripts encontrados no <code>package.json</code> do SFRA (e nos cartridges criados pelo <code>sgmf-scripts</code>):</p>
+<table>
+<thead><tr><th>Script</th><th>Comando</th><th>Para quê</th></tr></thead>
+<tbody>
+<tr><td><code>compile:js</code></td><td><code>sgmf-scripts --compile js</code></td><td>Bundles de <code>client/*/js/*.js</code> → <code>static/*/js</code></td></tr>
+<tr><td><code>compile:scss</code></td><td><code>sgmf-scripts --compile css</code></td><td><code>client/*/scss/**</code> → <code>static/*/css</code></td></tr>
+<tr><td><code>compile:fonts</code></td><td>(script do projeto)</td><td>Copia fontes de ícones</td></tr>
+<tr><td><code>build</code></td><td>js + fonts + scss</td><td>Tudo de uma vez</td></tr>
+<tr><td><code>lint</code>, <code>lint:js</code>, <code>lint:css</code></td><td><code>sgmf-scripts --lint js|css</code></td><td>ESLint e Stylelint</td></tr>
+<tr><td><code>lint:isml</code></td><td><code>isml-linter</code></td><td>Lint de templates (ferramenta da comunidade)</td></tr>
+<tr><td><code>test</code></td><td><code>sgmf-scripts --test test/unit/**/*.js</code></td><td>Testes unitários (mocha)</td></tr>
+<tr><td><code>cover</code></td><td><code>sgmf-scripts --cover 'test/unit'</code></td><td>Unitários com cobertura</td></tr>
+<tr><td><code>test:integration</code></td><td><code>sgmf-scripts --integration 'test/integration/**/*.js'</code></td><td>Integração contra uma instância (usa <code>dw.json</code>)</td></tr>
+<tr><td><code>upload</code>, <code>uploadCartridge</code>, <code>watch</code></td><td><code>sgmf-scripts --upload…</code></td><td>Envio por WebDAV (dwupload)</td></tr>
+</tbody>
+</table>
+<p>Num repositório com vários cartridges próprios, um <code>webpack.config.js</code> na raiz pode usar <code>sgmf-scripts.createJsPath()</code> e <code>createScssPath()</code> por cartridge, ou cada cartridge pode ter o seu <code>package.json</code>. O importante é que o build de todos rode no CI antes do deploy.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="testes" data-k="cap. 4">
+<h2>Testes unitários sem servidor</h2>
+<div class="prose">
+<p>A documentação do SFRA define a estratégia: <strong>models e helpers</strong> com testes unitários (mocha, chai, sinon, proxyquire); <strong>controllers</strong> com testes de integração; <strong>views</strong> com testes funcionais (webdriver). Como <code>dw/*</code> só existe no servidor, o <strong>proxyquire</strong> injeta mocks no lugar de cada <code>require</code>. Exemplo real do base (teste do <code>accountHelpers</code>):</p>
+<script type="text/plain" class="src" data-lang="js" data-file="test/unit/app_storefront_base/scripts/helpers/accountHelpers.js (trecho do SFRA)">
+var assert = require('chai').assert;
+var proxyquire = require('proxyquire').noCallThru().noPreserveCache();
+var sinon = require('sinon');
+
+var urlStub = sinon.stub();
+
+describe('accountHelpers', function () {
+    var accountHelpers = proxyquire('../../../../../cartridges/app_storefront_base/cartridge/scripts/helpers/accountHelpers', {
+        'dw/web/URLUtils': { url: urlStub },
+        'dw/system/Transaction': { wrap: function (callback) { return callback(); } },
+        'dw/web/Resource': { msg: function () { return 'NOT_EMPTY_STRING'; } }
+        // ... demais dependências mockadas
+    });
+
+    it('should return a url with no args and registration false when no redirect url is passed in', function () {
+        // ...
+    });
+});
+</script>
+<h3 id="teste-proprio">Testando um helper do projeto</h3>
+<p>Teste do <code>availabilityHelpers.describeAvailability</code> do <a class="text-link" href="02-catalogo-precos-inventario.html#api-inventario">tema 02</a>:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="test/unit/app_custom_acme/scripts/helpers/availabilityHelpers.js">
+'use strict';
+
+var assert = require('chai').assert;
+var proxyquire = require('proxyquire').noCallThru().noPreserveCache();
+
+function fakeProduct(opts) {
+    var levels = {
+        inStock: { value: opts.inStock || 0 },
+        preorder: { value: 0 },
+        backorder: { value: opts.backorder || 0 },
+        notAvailable: { value: opts.notAvailable || 0 }
+    };
+    return {
+        getAvailabilityModel: function () {
+            return {
+                getInventoryRecord: function () {
+                    return opts.record === null ? null : {
+                        getATS: function () { return { value: opts.ats }; },
+                        isPerpetual: function () { return false; },
+                        getInStockDate: function () { return null; }
+                    };
+                },
+                getAvailabilityLevels: function () { return levels; },
+                isOrderable: function () { return opts.ats > 0; },
+                isInStock: function () { return opts.inStock > 0; },
+                getAvailabilityStatus: function () { return opts.status; }
+            };
+        }
+    };
+}
+
+describe('availabilityHelpers.describeAvailability', function () {
+    var product;
+    var helpers = proxyquire('../../../../../cartridges/app_custom_acme/cartridge/scripts/helpers/availabilityHelpers', {
+        'dw/catalog/ProductMgr': { getProduct: function () { return product; } },
+        'dw/catalog/ProductAvailabilityModel': { AVAILABILITY_STATUS_BACKORDER: 'BACKORDER' }
+    });
+
+    it('marca backorder quando o status é BACKORDER', function () {
+        product = fakeProduct({ ats: 5, inStock: 0, backorder: 2, status: 'BACKORDER' });
+        var result = helpers.describeAvailability('X', 2);
+        assert.isTrue(result.isBackorder);
+        assert.isTrue(result.orderable);
+        assert.equal(result.split.backorder, 2);
+    });
+
+    it('devolve ats null quando não há inventory record', function () {
+        product = fakeProduct({ record: null, ats: 0, status: 'NOT_AVAILABLE' });
+        var result = helpers.describeAvailability('X', 1);
+        assert.isNull(result.ats);
+        assert.isFalse(result.orderable);
+    });
+});
+</script>
+<h3 id="mock-supermodule">Testando código que usa module.superModule</h3>
+<p>O SFRA traz <code>test/mockModuleSuperModule.js</code>, que injeta um <code>superModule</code> falso antes do proxyquire:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="padrão com mockModuleSuperModule">
+var mockSuperModule = require('../../../../mockModuleSuperModule');
+var baseFullProductMock = function (product) { product.id = 'BASE'; return product; };
+
+describe('fullProduct (acme)', function () {
+    before(function () { mockSuperModule.create(baseFullProductMock); });
+    after(function () { mockSuperModule.remove(); });
+
+    it('acrescenta sustainability ao model do base', function () {
+        var fullProduct = proxyquire('../../../../../cartridges/app_custom_acme/cartridge/models/product/fullProduct', {
+            '*/cartridge/models/product/decorators/sustainability': function (obj) { obj.sustainability = { isEco: true }; }
+        });
+        var result = fullProduct({}, {}, {});
+        assert.equal(result.id, 'BASE');
+        assert.isTrue(result.sustainability.isEco);
+    });
+});
+</script>
+<h3 id="integracao">Integração e funcionais</h3>
+<ul>
+  <li><strong>Integração</strong> (<code>npm run test:integration</code>): requests HTTP reais a uma sandbox (<code>request-promise</code>, <code>chai</code>), que validam rotas e JSON. Precisam do <code>dw.json</code> (ou de parâmetros) e de dados importados.</li>
+  <li><strong>Funcionais/E2E</strong>: navegador automatizado (webdriver.io, codeceptjs) percorrendo PDP, carrinho e checkout. Caros; rode os fluxos críticos (happy path).</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="git" data-k="cap. 5">
+<h2>Git: estrutura e o que versionar</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="text" data-file="estrutura sugerida do repositório">
+acme-b2c/
+├── .github/workflows/          # CI/CD
+├── .nvmrc                      # versão do Node
+├── package.json / package-lock.json
+├── webpack.config.js
+├── cartridges/
+│   ├── app_custom_acme/        # customizações do site
+│   ├── int_acme_reviews/       # integrações
+│   └── bm_acme_tools/          # extensões de BM
+├── metadata/                   # "configuração como código", importável (site archive)
+│   ├── meta/                   # system-objecttype-extensions.xml, custom-objecttype-definitions.xml
+│   ├── services.xml
+│   ├── jobs.xml
+│   └── sites/RefArch/preferences.xml
+├── test/
+│   ├── unit/
+│   └── integration/
+└── README.md                   # cartridge path esperado, como rodar, como publicar
+</script>
+<script type="text/plain" class="src" data-lang="text" data-file=".gitignore">
+node_modules/
+dw.json
+.env
+*.log
+# saída do build (gerada no CI); versione só se o processo do time exigir
+cartridges/*/cartridge/static/*/js/
+cartridges/*/cartridge/static/*/css/
+coverage/
+.nyc_output/
+</script>
+<h3 id="sfra-base">E o SFRA base?</h3>
+<p>O <code>app_storefront_base</code> <strong>não se edita</strong>. As opções comuns: (a) repositório irmão clonado na tag certa, como a documentação descreve; (b) cópia do base num diretório <code>vendor/</code> do repositório, atualizada só em upgrades (commit "chore: SFRA v7.x.y"). Qualquer alteração no base aparece como diff e é um alerta.</p>
+<aside class="callout" data-kind="best">
+<p>A documentação de boas práticas recomenda <strong>não versionar zips</strong> de cartridges (o Git não rastreia mudanças dentro deles) e versionar o conteúdo de exports de configuração. Exports do BM são ordenados, então diffs entre exports revelam mudanças reais.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="branches" data-k="cap. 6">
+<h2>Branches, revisões e releases</h2>
+<div class="prose">
+<script type="text/plain" class="mmd" data-caption="um fluxo de branches comum em projetos B2C">
+flowchart LR
+  F1["feature/PDP-123"] -->|"PR + review + CI verde"| DEV["develop<br/>(deploy contínuo na sandbox de integração)"]
+  F2["feature/CHK-77"] -->|"PR"| DEV
+  DEV -->|"release/2026.11"| REL["release branch<br/>(deploy em Staging → QA em Development)"]
+  REL -->|"tag v2026.11.0"| MAIN["main<br/>(o que está em Production)"]
+  HOT["hotfix/…"] -->|"tag v2026.11.1"| MAIN
+  HOT --> DEV
+</script>
+<ul>
+  <li><strong>Uma sandbox por desenvolvedor</strong> (feature branches) e uma sandbox de integração (o "Build/Merge" da documentação) para <code>develop</code>.</li>
+  <li><strong>Pull requests</strong> com revisão e o CI (lint + testes + build) obrigatórios.</li>
+  <li><strong>Releases</strong> viram tags no Git e <strong>code versions nomeadas</strong> em Staging (ex.: <code>v2026-11-0</code>): qualquer versão em produção é rastreável até um commit.</li>
+  <li><strong>Hotfix</strong>: branch a partir da tag em produção, code version nova, replicação, merge de volta em <code>develop</code>.</li>
+  <li>Mudanças de <strong>metadados</strong> (atributos, preferências, CO types) vão no mesmo PR do código que as usa, na pasta <code>metadata/</code>, e são importadas no deploy.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="ci" data-k="cap. 7">
+<h2>CI/CD com a GitHub Action oficial</h2>
+<div class="prose">
+<p>O projeto <em>B2C Developer Tooling</em> publica GitHub Actions oficiais (<code>setup</code>, <code>code-deploy</code>, <code>data-import</code>, <code>job-run</code>, <code>webdav-upload</code> e um passthrough para qualquer comando). Credenciais ficam em <strong>secrets</strong> e configuração não sensível em <strong>variables</strong>.</p>
+<script type="text/plain" class="src" data-lang="text" data-file=".github/workflows/deploy-staging.yml">
+name: Deploy Staging
+
+on:
+  push:
+    branches: [ 'release/**' ]
+
+jobs:
+  build-test-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+      # instala o b2c CLI e expõe as credenciais para os passos seguintes
+      - uses: SalesforceCommerceCloud/b2c-developer-tooling/actions/setup@v2
+        with:
+          client-id: ${{ secrets.SFCC_CLIENT_ID }}
+          client-secret: ${{ secrets.SFCC_CLIENT_SECRET }}
+          server: ${{ vars.SFCC_SERVER }}
+          username: ${{ secrets.SFCC_USERNAME }}
+          password: ${{ secrets.SFCC_PASSWORD }}
+
+      - name: Nome da code version
+        id: version
+        run: |
+          BRANCH=$(echo "$GITHUB_REF_NAME" | tr '/' '-')
+          echo "code-version=${BRANCH}-$(date +%Y%m%d-%H%M%S)" >> "$GITHUB_OUTPUT"
+
+      - uses: SalesforceCommerceCloud/b2c-developer-tooling/actions/code-deploy@v2
+        with:
+          code-version: ${{ steps.version.outputs.code-version }}
+          activate: true
+
+      # metadados versionados (atributos, preferências, serviços, jobs)
+      - uses: SalesforceCommerceCloud/b2c-developer-tooling/actions/data-import@v2
+        with:
+          archive: ./metadata
+</script>
+<aside class="callout" data-kind="verify">
+<p>Os nomes das actions e das entradas (<code>code-version</code>, <code>activate</code>) seguem o guia <em>CI/CD with GitHub Actions</em> do B2C Developer Tooling (actions <code>@v2</code>). Confira a entrada exata do <code>data-import</code> na versão que você usar. Uploads para <strong>Staging</strong> também exigem o certificado de cliente da organização (2FA), configurado no runner.</p>
+</aside>
+<p>Etapas típicas de um pipeline completo: <strong>install → lint → unit tests → build → deploy</strong> (code version nova) <strong>→ import de metadados → activate → smoke test</strong> (integração ou E2E curtos) <strong>→ notificação</strong>. A replicação de Staging para Production é um passo separado, com aprovação.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Achar que o Node roda o storefront</strong> ou que pacotes npm ficam disponíveis no servidor.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Segredos no repositório</strong> (<code>dw.json</code>, <code>.env</code>, chaves em YAML).</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Deploy manual do computador de um dev para Staging</strong>, sem rastreio de qual commit está em qual code version.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Testes que dependem de uma instância</strong> para lógica pura (cálculos, transformações). Isole em helpers e teste com proxyquire.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>Node no SFCC → <strong>gerenciar dependências e ferramentas</strong> (build, lint, testes, upload).</li>
+  <li>Testes de models/helpers: <strong>mocha + chai + sinon + proxyquire</strong>; controllers: integração; views: funcionais.</li>
+  <li>Compilar JS: <code>npm run compile:js</code>; SCSS: <code>npm run compile:scss</code>.</li>
+  <li>Repositórios SFRA clonados <strong>lado a lado</strong> e na <strong>mesma tag</strong>.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td><code>npm install</code> falha com node-sass ou sass</td><td>Versão do Node diferente da esperada</td><td>Use a versão do <code>.nvmrc</code>; limpe <code>node_modules</code>.</td></tr>
+<tr><td>Teste falha com <code>Cannot find module 'dw/…'</code></td><td>Dependência não mockada no proxyquire</td><td>Inclua o mock; use <code>noCallThru()</code>.</td></tr>
+<tr><td>Teste passa local e falha no CI</td><td>Lockfile desatualizado; Node diferente; ordem de testes (estado compartilhado)</td><td><code>npm ci</code>; <code>.nvmrc</code>; <code>noPreserveCache()</code> e reset de stubs.</td></tr>
+<tr><td>Build do CI sem o CSS do base</td><td><code>paths.base</code> apontando para um diretório que não existe no runner</td><td>Faça checkout do SFRA na tag certa no pipeline (ou use <code>vendor/</code>).</td></tr>
+<tr><td>Deploy do CI recusado em Staging</td><td>Certificado de cliente ausente</td><td>Configure o certificado no runner.</td></tr>
+<tr><td>Não se sabe qual commit está em produção</td><td>Code version sem nome rastreável</td><td>Nomeie versões por tag ou branch + data; registre no pipeline.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Explicar o papel do Node (tooling) e gerenciar a versão e as dependências.</li>
+  <li>Usar os scripts npm do SFRA: compile, lint, test, cover, integration, upload, watch.</li>
+  <li>Escrever testes unitários com proxyquire, inclusive para código com <code>module.superModule</code>.</li>
+  <li>Organizar o repositório (cartridges, metadados, testes) e o <code>.gitignore</code>.</li>
+  <li>Definir um fluxo de branches, PRs e releases ligado a code versions.</li>
+  <li>Montar um pipeline de CI/CD com o b2c CLI ou as actions oficiais.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Qual é o papel do Node.js num projeto SFRA, segundo a documentação?</p>
+  <ol class="opts-l"><li>Executar os controllers</li><li>Gerenciar dependências npm e ferramentas (build, lint, testes, upload)</li><li>Servir os estáticos</li><li>Rodar jobs</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O servidor usa o motor de script da plataforma.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Como testar um helper que usa <code>require('dw/catalog/ProductMgr')</code> fora do servidor?</p>
+  <ol class="opts-l"><li>Não é possível</li><li>Com proxyquire, substituindo o <code>require</code> por um mock</li><li>Instalando <code>dw</code> pelo npm</li><li>Só com testes de integração</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> É o padrão dos testes unitários do próprio SFRA.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Que tipo de teste a documentação do SFRA associa a controllers?</p>
+  <ol class="opts-l"><li>Unitário</li><li>Integração</li><li>Funcional</li><li>Nenhum</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Models: unitários; controllers: integração; views: funcionais.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">O que não deve ser versionado?</p>
+  <ol class="opts-l"><li><code>metadata/meta/*.xml</code></li><li><code>dw.json</code> com credenciais</li><li><code>package-lock.json</code></li><li>Testes</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Os metadados e o lockfile devem estar no repositório.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Por que nomear a code version com branch e data (ou tag) no CI?</p>
+  <ol class="opts-l"><li>É exigência do WebDAV</li><li>Para rastrear qual commit está em cada instância e permitir rollback</li><li>Para acelerar o upload</li><li>Para evitar quotas</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Combina com a boa prática de uma code version nova por deploy.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-build-sfra.html">Get Started with SFRA</a>: Node, npm, comandos de build.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-testing-sfra.html">SFRA Testing Technologies</a></li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-dev-best-practices.html">Development Best Practices</a> e <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-code-deployment.html">Code Deployment</a> (estágios, versionamento).</li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-developer-tooling/guide/ci-cd.html">CI/CD with GitHub Actions</a> (B2C Developer Tooling).</li>
+  <li><a class="text-link" href="https://github.com/SalesforceCommerceCloud/sgmf-scripts">sgmf-scripts</a></li>
+  <li>Código do SFRA: <code>package.json</code> (scripts), <code>test/unit/**</code>, <code>test/mockModuleSuperModule.js</code>.</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

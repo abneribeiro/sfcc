@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>18 · Jobs, steps e import/export · Guia SFCC</title>
+<meta name="description" content="Job framework do B2C Commerce: jobs, flows, escopo (organização × site), steps padrão de import/export, custom step types task-oriented e chunk-oriented, steptypes.json, exit status e regras, modos de import MERGE/UPDATE/REPLACE/DELETE, IMPEX, jobs.xml, agendamento, recursos bloqueados e boas práticas.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="18" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Jobs, steps e import/export</h1>
+  <p class="lead">Tudo que é pesado, periódico ou não pertence a uma requisição do comprador roda em <strong>jobs</strong>: importar catálogo e preços, exportar pedidos, reconstruir índices, replicar dados, sincronizar com ERP, limpar custom objects. Este tema cobre o framework de jobs (flows, escopo, steps, regras), os steps padrão de import/export e seus modos, e como escrever <strong>custom job steps</strong> task-oriented e chunk-oriented com <code>steptypes.json</code>.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>Job</dt><dd>Unidade agendável ou disparável (BM em <em>Administration &gt; Operations &gt; Jobs</em>, OCAPI/SCAPI Data, b2c CLI). Contém um ou mais <strong>flows</strong>.</dd>
+  <dt>Flow</dt><dd>Sequência de <strong>steps</strong> com um <strong>escopo</strong>: <em>Organization</em>, <em>All Storefront Sites</em>, <em>Specific Sites</em> ou <em>Site Parameter</em> (só via API). Flows irmãos (<em>split</em>) podem rodar em paralelo.</dd>
+  <dt>Step</dt><dd>Ação executada: um step padrão do sistema (<code>ImportCatalog</code>, <code>SearchReindex</code>…) ou um <strong>custom step type</strong> registrado por um cartridge.</dd>
+  <dt>Exit status</dt><dd>Código que o step devolve (<code>OK</code>, <code>ERROR</code> ou um código custom como <code>NO_FILES_FOUND</code>). As <strong>regras de saída</strong> do step decidem se o job continua, para o flow ou para o job.</dd>
+  <dt>IMPEX</dt><dd>Área de arquivos da instância para import/export (<code>/on/demandware.servlet/webdav/Sites/Impex</code>). Os steps de import leem de <code>IMPEX/src/…</code>; os exports escrevem em <code>IMPEX/src/…</code> ou <code>IMPEX/export…</code>, conforme a configuração.</dd>
+  <dt>Job context</dt><dd>Mapa compartilhado entre steps da mesma execução: <code>stepExecution.getJobExecution().getContext()</code>.</dd>
+</dl>
+<aside class="callout" data-kind="note">
+<p>O framework de jobs atual substituiu os <em>legacy jobs</em> (baseados em pipelines). O step <code>ExecuteScriptModule</code> também está <strong>deprecated</strong>: a recomendação oficial é registrar steps próprios via <code>steptypes.json</code>.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="framework" data-k="cap. 2">
+<h2>Estrutura de um job no Business Manager</h2>
+<div class="prose">
+<script type="text/plain" class="mmd" data-caption="job com flows sequenciais e um split paralelo">
+flowchart TB
+  subgraph J["Job: acme-catalog-daily"]
+    direction TB
+    F1["Flow 1 · escopo Organization<br/>custom.AcmeDownloadFeeds"] --> S
+    subgraph S["Split (flows irmãos, paralelos)"]
+      direction LR
+      A["Flow · Organization<br/>ImportCatalog"]
+      B["Flow · Organization<br/>ImportPriceBook"]
+      C["Flow · Organization<br/>ImportInventoryLists"]
+    end
+    S --> F3["Flow 3 · Specific Sites (RefArch)<br/>SearchReindex (incremental)"]
+  end
+</script>
+<ol class="steps">
+  <li><strong>New Job</strong>: ID e descrição.</li>
+  <li><strong>Schedule and History</strong> (opcional): <em>Once</em> ou recorrente, com precisão de minuto. Jobs agendados <strong>não rodam em sandboxes</strong>; lá, use "Run Now", a API ou o CLI.</li>
+  <li><strong>Resources</strong> (opcional): bloqueia tipos de objeto (ex.: catálogo, pedidos) para que outros jobs não os modifiquem ao mesmo tempo.</li>
+  <li><strong>Job Steps</strong>: adicione flows, escolha o escopo e configure cada step (parâmetros, <em>enforce restart</em>, <strong>Exit Status Rules</strong>).</li>
+  <li><strong>Notification</strong>: e-mail em erro, na conclusão ou quando o job ficar "pendurado" (<em>runtime threshold</em>).</li>
+</ol>
+<ul>
+  <li>Um job <strong>não inicia</strong> se uma execução anterior dele ainda estiver rodando. Saiba a duração antes de agendar.</li>
+  <li>Steps têm escopo próprio: <code>CreateSitemap</code> só roda em site; <code>ExecuteDataReplication</code> e <code>ImportCatalog</code> só em organização. Pôr o step num flow de escopo errado mostra erro na configuração.</li>
+  <li><strong>Job parameters</strong> globais podem ser referenciados por vários steps (<code>job-parameter-ref</code>).</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="steps-padrao" data-k="cap. 3">
+<h2>Steps padrão (system steps)</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Grupo</th><th>Type IDs (escopo)</th></tr></thead>
+<tbody>
+<tr><td>Import de catálogo e preço</td><td><code>ImportCatalog</code>, <code>ImportPriceBook</code>, <code>ImportInventoryLists</code>, <code>ImportAssignments</code> (Organization)</td></tr>
+<tr><td>Import de site</td><td><code>ImportPromotions</code>, <code>ImportCoupons</code>, <code>ImportContentSlots</code>, <code>ImportContent</code>, <code>ImportCustomers</code>, <code>ImportCustomerGroups</code>, <code>ImportShippingMethods</code>, <code>ImportStores</code>, <code>ImportTaxTable</code>, <code>ImportActiveData</code> (Site)</td></tr>
+<tr><td>Outros imports</td><td><code>ImportCustomObjects</code> (Org e Site), <code>ImportSiteArchive</code>, <code>ImportCustomerLists</code>, <code>ImportKeyValueMapping</code> (Org)</td></tr>
+<tr><td>Export</td><td><code>ExportCatalog</code>, <code>ExportPriceBook</code>, <code>ExportMetaData</code>, <code>SiteExport</code> (Org); <code>ExportOrders</code>, <code>ExportCustomers</code>, <code>ExportPromotions</code>, <code>ExportInventoryLists</code>… (Site); <code>CatalogDeltaExport</code>, <code>LibraryDeltaExport</code></td></tr>
+<tr><td>Processamento</td><td><code>SearchReindex</code>, <code>InvalidateCache</code>, <code>CreateSitemap</code>, <code>UpdateStorefrontURLs</code> (Site); <code>ExecuteDataReplication</code>, <code>ExecutePreconfiguredDataReplicationProcess</code>, <code>ExecutePreconfiguredCodeReplicationProcess</code>, <code>ExecuteCategorizationRules</code> (Org); <code>IncludeStepsFromJob</code></td></tr>
+</tbody>
+</table>
+<p>Parâmetros típicos de um import (ex.: <code>ImportCatalog</code>):</p>
+<table>
+<thead><tr><th>Parâmetro</th><th>Valores</th><th>Observação</th></tr></thead>
+<tbody>
+<tr><td><code>WorkingFolder</code></td><td>relativo a <code>IMPEX/src/</code></td><td>Padrão: <code>IMPEX/src/</code>.</td></tr>
+<tr><td><code>FileNamePattern</code></td><td>regex (ex.: <code>catalog_.*\.xml</code>)</td><td>Arquivos importados em ordem alfanumérica.</td></tr>
+<tr><td><code>ImportMode</code></td><td><code>Merge</code> (padrão), <code>Update</code>, <code>Replace</code>, <code>Delete</code></td><td>Ver o capítulo seguinte.</td></tr>
+<tr><td><code>ImportFailedHandling</code></td><td><code>WARN</code> (padrão), <code>ERROR</code></td><td>Exit status quando o import falha.</td></tr>
+<tr><td><code>NoFilesFoundHandling</code></td><td><code>NO_FILES_FOUND</code> (padrão), <code>OK</code>, <code>WARN</code>, <code>ERROR</code></td><td>Exit status sem arquivos.</td></tr>
+<tr><td><code>AfterImportFileHandling</code></td><td><code>Archive</code> (padrão), <code>Keep</code>, <code>Delete</code>, <code>Archive Zipped</code>…</td><td>Pasta <code>ArchiveFolder</code> (padrão <code>IMPEX/archive/</code>).</td></tr>
+</tbody>
+</table>
+<aside class="callout" data-kind="warn">
+<p>Import e export <strong>não são permitidos no storefront</strong>: a quota <code>api.pipelet.ImportExport</code> tem limite 0 para storefront. O mesmo vale para operações de arquivo como <code>File.createNewFile()</code>, <code>gzip</code> e <code>zip</code>. Isso é trabalho de job.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="modos" data-k="cap. 4">
+<h2>Modos de import: MERGE, UPDATE, REPLACE e DELETE</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Modo</th><th>Objeto não existe</th><th>Objeto existe</th><th>Atributos ausentes no feed</th></tr></thead>
+<tbody>
+<tr><td><strong>MERGE</strong></td><td>Cria (com defaults)</td><td>Atualiza</td><td>Mantidos</td></tr>
+<tr><td><strong>UPDATE</strong></td><td><strong>Não cria</strong></td><td>Atualiza</td><td>Mantidos</td></tr>
+<tr><td><strong>REPLACE</strong></td><td>Cria</td><td>Recria (DELETE + MERGE)</td><td><strong>Removidos</strong></td></tr>
+<tr><td><strong>DELETE</strong></td><td>Ignora</td><td>Remove (só o ID importa)</td><td>n/a</td></tr>
+</tbody>
+</table>
+<p>Exemplo oficial: banco com A, B, C, E, F; feed com A (+atributo), B (−atributo), C, D (novo), F (valor alterado).</p>
+<table>
+<thead><tr><th>Modo</th><th>Resultado</th></tr></thead>
+<tbody>
+<tr><td>MERGE</td><td>A⁺, B, C, <strong>D</strong>, E, F<sup>Δ</sup> (B mantém o atributo, D criado, E intocado)</td></tr>
+<tr><td>UPDATE</td><td>A⁺, B, C, E, F<sup>Δ</sup> (D não é criado)</td></tr>
+<tr><td>REPLACE</td><td>A⁺, B⁻, C, D, F<sup>Δ</sup>, e E permanece, <em>exceto em price books</em></td></tr>
+<tr><td>DELETE</td><td>sobra só E (e, em price book, o price book inteiro é removido)</td></tr>
+</tbody>
+</table>
+<ul>
+  <li><strong>Nenhum modo apaga objetos que não estão no feed</strong> (salvo price books e inventory lists em REPLACE, que substituem a lista inteira). Remoções precisam de estratégia explícita (DELETE ou <code>mode="delete"</code>).</li>
+  <li>Exclusão pontual dentro de um feed MERGE: <code>&lt;product product-id="PN00001" mode="delete"/&gt;</code>.</li>
+  <li><strong>Listas</strong> (elementos repetidos) no XML substituem a lista inteira no banco, em MERGE ou REPLACE. Se a lista não vier no arquivo, MERGE a mantém e REPLACE a apaga.</li>
+  <li><strong>Active Data</strong> sempre importa em REPLACE: atributos ausentes no CSV são perdidos.</li>
+  <li>Boa prática: <strong>delta feeds</strong> (só mudanças) para produção, exceto em elementos que sempre usam REPLACE (ex.: <code>bundled-products</code>). Imports não têm rollback; <strong>arquive</strong> o último feed para poder reimportar.</li>
+</ul>
+<script type="text/plain" class="src" data-lang="xml" data-file="IMPEX/src/catalog/catalog_delta_20261104.xml (MERGE com exclusão pontual)">
+<?xml version="1.0" encoding="UTF-8"?>
+<catalog xmlns="http://www.demandware.com/xml/impex/catalog/2006-10-31" catalog-id="acme-master">
+    <product product-id="ACME-TEE-001">
+        <display-name xml:lang="x-default">Camiseta Orgânica</display-name>
+        <online-flag>true</online-flag>
+        <custom-attributes>
+            <custom-attribute attribute-id="sustainabilityScore">87</custom-attribute>
+        </custom-attributes>
+    </product>
+    <product product-id="ACME-TEE-OLD" mode="delete"/>
+</catalog>
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="custom-steps" data-k="cap. 5">
+<h2>Custom job steps: task-oriented × chunk-oriented</h2>
+<div class="prose">
+<table>
+<thead><tr><th></th><th>Task-oriented (<code>script-module-step</code>)</th><th>Chunk-oriented (<code>chunk-script-module-step</code>)</th></tr></thead>
+<tbody>
+<tr><td>Quando usar</td><td>Uma tarefa única cujo progresso não dá para medir: baixar arquivo, chamar API, mover arquivos</td><td>Itens contáveis (pedidos, produtos, COs) processados em lotes</td></tr>
+<tr><td>Funções</td><td>Uma função exportada (<code>function</code> no steptypes; padrão <code>execute</code>)</td><td><code>read</code>, <code>process</code>, <code>write</code> obrigatórias; <code>beforeStep</code>, <code>getTotalCount</code>, <code>beforeChunk</code>, <code>afterChunk</code>, <code>afterStep</code> opcionais</td></tr>
+<tr><td>Exit status</td><td>O <code>Status</code> retornado (inclusive códigos custom)</td><td>Sempre <code>OK</code> ou <code>ERROR</code></td></tr>
+<tr><td>Monitoramento</td><td>Só início e fim</td><td>Progresso "X de N" (com <code>getTotalCount</code>)</td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="mmd" data-caption="ciclo de um chunk step (chunk-size = 4)">
+flowchart LR
+  BS["beforeStep()"] --> TC["getTotalCount()"] --> BC["beforeChunk()"]
+  BC --> R["read() → item"] --> P["process(item) → resultado<br/>(undefined = filtra)"]
+  P -->|"< chunk-size e ainda há itens"| R
+  P -->|"chunk cheio ou read() vazio"| W["write(lista)"] --> AC["afterChunk()"]
+  AC -->|"há itens"| BC
+  AC -->|"fim"| AS["afterStep(success)"]
+</script>
+<h3 id="steptypes">steptypes.json</h3>
+<p>Fica na <strong>raiz do cartridge</strong> (ao lado da pasta <code>cartridge/</code>). É <strong>um por cartridge</strong> (JSON ou XML, nunca os dois). O <code>@type-id</code> começa com <code>custom.</code> e é único entre os cartridges. Se o arquivo tiver erro, nenhum step dele é registrado e o erro vai para o log.</p>
+<script type="text/plain" class="src" data-lang="json" data-file="cartridges/int_acme_jobs/steptypes.json">
+{
+  "step-types": {
+    "script-module-step": [
+      {
+        "@type-id": "custom.AcmeDownloadFeeds",
+        "@supports-parallel-execution": "false",
+        "@supports-site-context": "false",
+        "@supports-organization-context": "true",
+        "description": "Baixa feeds do SFTP do ERP para IMPEX/src",
+        "module": "int_acme_jobs/cartridge/scripts/steps/downloadFeeds.js",
+        "function": "execute",
+        "transactional": "false",
+        "timeout-in-seconds": "900",
+        "parameters": {
+          "parameter": [
+            { "@name": "ServiceID", "@type": "string", "@required": "true", "description": "ID do serviço SFTP" },
+            { "@name": "RemoteFolder", "@type": "string", "@required": "true", "description": "Pasta remota" },
+            { "@name": "FilePattern", "@type": "string", "@required": "true", "description": "Regex dos arquivos", "default-value": "catalog_.*\\.xml" },
+            { "@name": "TargetFolder", "@type": "string", "@required": "true", "description": "Destino relativo a IMPEX/src", "default-value": "catalog" }
+          ]
+        },
+        "status-codes": {
+          "status": [
+            { "@code": "OK", "description": "Arquivos baixados" },
+            { "@code": "NO_FILES_FOUND", "description": "Nenhum arquivo novo" },
+            { "@code": "ERROR", "description": "Falha de conexão ou de transferência" }
+          ]
+        }
+      }
+    ],
+    "chunk-script-module-step": [
+      {
+        "@type-id": "custom.AcmeExportOrdersCSV",
+        "@supports-parallel-execution": "false",
+        "@supports-site-context": "true",
+        "@supports-organization-context": "false",
+        "description": "Exporta pedidos prontos para o ERP em CSV",
+        "module": "int_acme_jobs/cartridge/scripts/steps/exportOrders.js",
+        "before-step-function": "beforeStep",
+        "total-count-function": "getTotalCount",
+        "read-function": "read",
+        "process-function": "process",
+        "write-function": "write",
+        "after-step-function": "afterStep",
+        "chunk-size": 100,
+        "transactional": "false",
+        "parameters": {
+          "parameter": [
+            { "@name": "ExportFolder", "@type": "string", "@required": "true", "description": "Relativo a IMPEX/src", "default-value": "orders" }
+          ]
+        }
+      }
+    ]
+  }
+}
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="task" data-k="cap. 6">
+<h2>Implementando um step task-oriented</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/int_acme_jobs/cartridge/scripts/steps/downloadFeeds.js">
+'use strict';
+
+var Status = require('dw/system/Status');
+var File = require('dw/io/File');
+var Logger = require('dw/system/Logger').getLogger('jobs', 'AcmeDownloadFeeds');
+var LocalServiceRegistry = require('dw/svc/LocalServiceRegistry');
+
+/**
+ * Baixa arquivos do SFTP do ERP para IMPEX/src/{TargetFolder}.
+ * @param {Object} parameters - parâmetros configurados no BM (steptypes.json)
+ * @param {dw.job.JobStepExecution} stepExecution - contexto da execução
+ * @returns {dw.system.Status} OK | NO_FILES_FOUND | ERROR
+ */
+exports.execute = function (parameters, stepExecution) {
+    var target = new File(File.IMPEX + '/src/' + parameters.TargetFolder);
+    if (!target.exists()) {
+        target.mkdirs();
+    }
+
+    var service = LocalServiceRegistry.createService(parameters.ServiceID, {
+        // com execute() definido, setOperation() não é necessário
+        createRequest: function (svc, remoteFolder, pattern) {
+            return { folder: remoteFolder, pattern: new RegExp(pattern) };
+        },
+        execute: function (svc, req) {
+            var client = svc.getClient(); // dw.net.SFTPClient já conectado
+            var downloaded = [];
+            client.list(req.folder).forEach( // SFTPFileInfo[] (array JS)
+                function (info) {
+                if (!info.directory && req.pattern.test(info.name)) {
+                    var local = new File(target, info.name);
+                    if (client.getBinary(req.folder + '/' + info.name, local)) {
+                        client.del(req.folder + '/' + info.name); // evita reprocessar
+                        downloaded.push(info.name);
+                    }
+                }
+            });
+            return downloaded;
+        },
+        parseResponse: function (svc, downloaded) { return downloaded; }
+    });
+
+    var result = service.call(parameters.RemoteFolder, parameters.FilePattern);
+    if (!result.ok) {
+        Logger.error('SFTP falhou: {0}', result.errorMessage);
+        return new Status(Status.ERROR, 'ERROR', result.errorMessage);
+    }
+    if (result.object.length === 0) {
+        return new Status(Status.OK, 'NO_FILES_FOUND', 'Nenhum arquivo novo.');
+    }
+
+    // disponibiliza para os próximos steps do mesmo job
+    stepExecution.getJobExecution().getContext().put('acmeFiles', result.object.join(','));
+    Logger.info('{0} arquivo(s) baixado(s)', result.object.length);
+    return new Status(Status.OK);
+};
+</script>
+<aside class="callout" data-kind="tip">
+<p>Retornar <code>Status(Status.OK, 'NO_FILES_FOUND')</code> (não erro, com código custom) permite uma regra "On NO_FILES_FOUND → stop flow" no BM ou no <code>jobs.xml</code>, sem marcar o job como falho. Códigos custom só valem para status não-erro: em <code>Status.ERROR</code>, o código vira <code>ERROR</code>.</p>
+</aside>
+<table>
+<thead><tr><th>Função terminou com…</th><th>Exit status</th><th>Sem regra: o job…</th></tr></thead>
+<tbody>
+<tr><td><code>Status.OK</code> (ou nenhum retorno, ou um objeto que não é Status)</td><td>OK</td><td>continua</td></tr>
+<tr><td><code>Status.OK</code> com código custom</td><td>o código custom</td><td>continua</td></tr>
+<tr><td><code>Status.ERROR</code></td><td>ERROR</td><td>para</td></tr>
+<tr><td>Exceção não tratada ou timeout</td><td>ERROR</td><td>para</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="chunk" data-k="cap. 7">
+<h2>Implementando um step chunk-oriented</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/int_acme_jobs/cartridge/scripts/steps/exportOrders.js">
+'use strict';
+
+var OrderMgr = require('dw/order/OrderMgr');
+var Order = require('dw/order/Order');
+var Transaction = require('dw/system/Transaction');
+var File = require('dw/io/File');
+var FileWriter = require('dw/io/FileWriter');
+var CSVStreamWriter = require('dw/io/CSVStreamWriter');
+var StringUtils = require('dw/util/StringUtils');
+var Calendar = require('dw/util/Calendar');
+
+var orders;      // SeekableIterator: precisa ser fechado
+var fileWriter;
+var csv;
+
+exports.beforeStep = function (parameters) {
+    var dir = new File(File.IMPEX + '/src/' + parameters.ExportFolder);
+    dir.mkdirs();
+    var name = 'orders_' + StringUtils.formatCalendar(new Calendar(), 'yyyyMMddHHmmss') + '.csv';
+    fileWriter = new FileWriter(new File(dir, name), 'UTF-8');
+    csv = new CSVStreamWriter(fileWriter);
+    csv.writeNext(['orderNo', 'creationDate', 'customerEmail', 'total', 'currency']);
+
+    // query indexada, ordenada; nada de carregar tudo em memória
+    orders = OrderMgr.searchOrders(
+        'exportStatus = {0} AND status != {1}',
+        'creationDate asc',
+        Order.EXPORT_STATUS_READY,
+        Order.ORDER_STATUS_FAILED
+    );
+};
+
+exports.getTotalCount = function () {
+    return orders.count;
+};
+
+exports.read = function () {
+    if (orders.hasNext()) {
+        return orders.next();
+    }
+    return undefined; // fim
+};
+
+exports.process = function (order) {
+    return {
+        order: order,
+        row: [
+            order.orderNo,
+            StringUtils.formatCalendar(new Calendar(order.creationDate), "yyyy-MM-dd'T'HH:mm:ss"),
+            order.customerEmail,
+            order.totalGrossPrice.value.toFixed(2),
+            order.currencyCode
+        ]
+    };
+};
+
+exports.write = function (items) {
+    for (var i = 0; i < items.size(); i++) {
+        var item = items.get(i);
+        csv.writeNext(item.row);
+        // uma transação por pedido (quota: um pedido alterado por commit)
+        Transaction.wrap(function () {
+            item.order.setExportStatus(Order.EXPORT_STATUS_EXPORTED);
+        });
+    }
+    fileWriter.flush();
+};
+
+exports.afterStep = function () {
+    if (csv) { csv.close(); }
+    if (fileWriter) { fileWriter.close(); }
+    if (orders) { orders.close(); }
+};
+</script>
+<ul>
+  <li>Mantenha <code>"transactional": "false"</code> e controle as transações com <code>Transaction.wrap</code>. Com <code>true</code>, o step inteiro vira <em>uma</em> transação potencialmente gigante.</li>
+  <li>Alterar vários pedidos num único commit dispara o alerta <code>object.OrderPO.multipleOrdersInCommit</code> (limite 1): <strong>uma transação por pedido</strong>.</li>
+  <li>Feche iterators (<code>SeekableIterator.close()</code>) e arquivos no <code>afterStep</code>, que recebe <code>success</code> como primeiro argumento.</li>
+  <li>O <code>process</code> pode devolver <code>undefined</code> para filtrar o item (ele não vai para o <code>write</code>).</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="jobs-xml" data-k="cap. 8">
+<h2>Jobs como código: jobs.xml e execução por API/CLI</h2>
+<div class="prose">
+<p>Jobs podem ser exportados e importados via site archive (<code>jobs.xml</code>, namespace <code>…/impex/jobs/2015-07-01</code>). Assim, eles ficam no Git junto com o código (<a class="text-link" href="16-node-git.html#git">tema 16</a>). Contexto de organização: <code>site-id="Sites"</code>.</p>
+<script type="text/plain" class="src" data-lang="xml" data-file="metadata/jobs.xml">
+<?xml version="1.0" encoding="UTF-8"?>
+<jobs xmlns="http://www.demandware.com/xml/impex/jobs/2015-07-01">
+    <job job-id="acme-catalog-daily" priority="0">
+        <description>Baixa e importa catálogo, preços e estoque; reindexa</description>
+        <parameters/>
+        <flow>
+            <context site-id="Sites"/>
+            <step step-id="download" type="custom.AcmeDownloadFeeds" enforce-restart="false">
+                <parameters>
+                    <parameter name="ServiceID">acme.erp.sftp</parameter>
+                    <parameter name="RemoteFolder">/out/catalog</parameter>
+                    <parameter name="FilePattern">catalog_.*\.xml</parameter>
+                    <parameter name="TargetFolder">catalog</parameter>
+                </parameters>
+                <rules>
+                    <on-exit status="NO_FILES_FOUND">
+                        <stop-job/>
+                    </on-exit>
+                </rules>
+            </step>
+            <step step-id="import-catalog" type="ImportCatalog" enforce-restart="false">
+                <parameters>
+                    <parameter name="WorkingFolder">catalog</parameter>
+                    <parameter name="FileNamePattern">catalog_.*\.xml</parameter>
+                    <parameter name="ImportMode">Merge</parameter>
+                    <parameter name="ImportFailedHandling">ERROR</parameter>
+                    <parameter name="NoFilesFoundHandling">NO_FILES_FOUND</parameter>
+                    <parameter name="AfterImportFileHandling">Archive Zipped</parameter>
+                </parameters>
+            </step>
+        </flow>
+        <flow>
+            <context site-id="RefArch"/>
+            <step step-id="reindex" type="SearchReindex" enforce-restart="false">
+                <parameters>
+                    <parameter name="Product related search indexes">true</parameter>
+                    <parameter name="Indexer Type">Incremental Index Update</parameter>
+                </parameters>
+            </step>
+        </flow>
+        <rules>
+            <on-running runtime-threshold="60m" enabled="true">
+                <mark-job-as-hanging/>
+            </on-running>
+        </rules>
+        <triggers>
+            <run-recurring enabled="true">
+                <recurrence>
+                    <date-from>2026-11-01Z</date-from>
+                    <start-time>03:00:00.000Z</start-time>
+                    <interval>1d</interval>
+                    <day-of-week/>
+                </recurrence>
+            </run-recurring>
+        </triggers>
+    </job>
+</jobs>
+</script>
+<script type="text/plain" class="src" data-lang="bash" data-file="disparar e acompanhar">
+# b2c CLI (B2C Developer Tooling)
+b2c job run acme-catalog-daily --wait
+b2c job log acme-catalog-daily --failed
+b2c job run sfcc-search-index-product-full-update --body '{"site_scope":{"named_sites":["RefArch"]}}'
+
+# OCAPI Data API (equivalente)
+curl -X POST "$HOST/s/-/dw/data/v24_5/jobs/acme-catalog-daily/executions" -H "Authorization: Bearer $TOKEN"
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="boas-praticas" data-k="cap. 9">
+<h2>Boas práticas</h2>
+<div class="prose">
+<ul class="check">
+  <li><strong>Prefira steps padrão</strong> (import/export, reindex) e escreva custom steps só para o que falta (download, transformação, regra de negócio).</li>
+  <li><strong>Chunk</strong> para volumes; <strong>task</strong> para tarefas únicas.</li>
+  <li><strong>Queries com <code>searchOrders</code>/<code>queryCustomObjects</code></strong> e iteração; nunca carregue tudo com <code>toArray()</code> em coleções grandes.</li>
+  <li><strong>Transações curtas</strong> com <code>Transaction.wrap</code>; uma por pedido.</li>
+  <li><strong>Idempotência</strong>: marque o que foi processado (export status, flag, mover ou apagar o arquivo de origem) para que reexecuções não dupliquem.</li>
+  <li><strong>Timeouts</strong> (<code>timeout-in-seconds</code>), <strong>resources</strong> bloqueados e agenda que não sobrepõe jobs concorrentes.</li>
+  <li><strong>Log</strong> com um logger custom (categoria do job) e notificação por e-mail em erro.</li>
+  <li><strong>Delta feeds</strong> e arquivamento do último feed; limpe os arquivos antigos de <code>IMPEX/archive</code>.</li>
+  <li>Em produção, o cartridge com <code>steptypes.json</code> precisa estar <strong>replicado e ativo</strong>; o step aparece para seleção no BM.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Importar no storefront</strong> (controller que lê um arquivo e cria produtos): proibido por quota. Use jobs.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>REPLACE para "atualizar um campo"</strong>: apaga atributos e listas não enviados. Use MERGE ou UPDATE.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong><code>"transactional": "true"</code> num chunk step com milhares de itens</strong>: transação enorme, risco de lock e de rollback total.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Esperar que um job agendado rode na sandbox.</strong> Agendamento não é suportado em sandboxes.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>Custom step: módulo CommonJS + <code>steptypes.json</code> na <strong>raiz do cartridge</strong> + cartridge no path.</li>
+  <li>Task-oriented: uma função; chunk-oriented: <code>read</code>/<code>process</code>/<code>write</code>.</li>
+  <li><code>@type-id</code> começa com <code>custom.</code>.</li>
+  <li>MERGE cria e atualiza; UPDATE não cria; REPLACE recria e apaga o que falta; DELETE só precisa do ID.</li>
+  <li>Escopo do flow: Organization × Site; cada step suporta um ou ambos.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>Custom step não aparece no BM</td><td><code>steptypes.json</code> fora da raiz, inválido ou duplicado; cartridge fora do path; code version não ativa</td><td>Valide contra <code>steptypes.schema.json</code>; veja o log de erro ("Type with id … is unknown").</td></tr>
+<tr><td>Step não pode ser adicionado ao flow</td><td>Escopo incompatível (<code>@supports-site-context</code>/<code>organization-context</code>)</td><td>Ajuste o escopo do flow ou os atributos.</td></tr>
+<tr><td>Job fica "Pending"</td><td>Execução anterior ainda rodando; recurso bloqueado por outro job</td><td>Veja o histórico; ajuste agenda e recursos.</td></tr>
+<tr><td>Import "OK" mas nada mudou</td><td>Modo UPDATE com objetos novos; <code>FileNamePattern</code> não casa; arquivo em pasta errada</td><td>Revise o modo, o regex e a pasta (<code>IMPEX/src/…</code>).</td></tr>
+<tr><td>Atributos sumiram após import</td><td>REPLACE ou Active Data (sempre REPLACE)</td><td>Reimporte o feed arquivado; use MERGE.</td></tr>
+<tr><td>Job falha por timeout</td><td><code>timeout-in-seconds</code> baixo; query sem índice; serviço lento</td><td>Use chunk; otimize a query; configure timeout no serviço.</td></tr>
+<tr><td>Alerta de vários pedidos por transação</td><td>Commit em lote de pedidos</td><td>Uma transação por pedido.</td></tr>
+<tr><td>Onde estão os logs?</td><td>n/a</td><td>BM: <em>Jobs › History</em> (log da execução); Log Center; <code>custom-*.log</code> da categoria do logger.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Criar e agendar um job com flows, escopo, steps, regras de saída, recursos e notificações.</li>
+  <li>Escolher o step padrão certo para cada import/export e configurar os seus parâmetros.</li>
+  <li>Explicar MERGE, UPDATE, REPLACE e DELETE, inclusive as exceções (price book, listas, Active Data, <code>mode="delete"</code>).</li>
+  <li>Escrever steps task e chunk com <code>steptypes.json</code> e exit status corretos.</li>
+  <li>Versionar jobs (<code>jobs.xml</code>) e dispará-los via CLI ou API.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Um feed traz só os produtos alterados. Produtos novos devem ser criados e atributos não enviados mantidos. Qual modo?</p>
+  <ol class="opts-l"><li>UPDATE</li><li>MERGE</li><li>REPLACE</li><li>DELETE</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> UPDATE não cria; REPLACE apagaria atributos ausentes.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Onde fica o arquivo que registra um custom job step?</p>
+  <ol class="opts-l"><li><code>cartridge/scripts/steptypes.json</code></li><li><code>steptypes.json</code> na raiz do cartridge</li><li><code>package.json</code></li><li><code>hooks.json</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Um por cartridge, ao lado da pasta <code>cartridge/</code>.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Exportar 200 mil pedidos com progresso visível e transações curtas: que tipo de step?</p>
+  <ol class="opts-l"><li>Task-oriented com <code>transactional: true</code></li><li>Chunk-oriented com <code>getTotalCount</code> e <code>Transaction.wrap</code> por pedido no <code>write</code></li><li>Pipeline</li><li>Controller</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong></p></div></details>
+</li>
+<li>
+  <p class="drill-q">Um step task retorna <code>new Status(Status.OK, 'NO_FILES_FOUND')</code>. Sem regra configurada, o que acontece?</p>
+  <ol class="opts-l"><li>O job para com erro</li><li>O job continua; uma regra "On NO_FILES_FOUND" poderia parar o flow ou o job</li><li>O step é reexecutado</li><li>O código é ignorado</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Por padrão só ERROR para o job.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Um price book é importado em REPLACE com apenas 10 preços. O que acontece com os outros preços dele?</p>
+  <ol class="opts-l"><li>São mantidos</li><li>São removidos: em price books, REPLACE substitui o price book inteiro</li><li>Viram nulos</li><li>O import falha</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> É a exceção documentada.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Por que um job agendado não executou na sandbox?</p>
+  <ol class="opts-l"><li>Falta de quota</li><li>Jobs agendados não são suportados em sandboxes</li><li>O cartridge estava errado</li><li>O índice estava desatualizado</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Use Run Now, a API ou o CLI.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-custom-job-steps.html">Create Custom Job Step Types</a> e <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-step-types-json-example.html">Steptypes.json Example</a></li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/jobstepapi/html/index.html">B2C Commerce Job Steps</a> (referência dos steps padrão)</li>
+  <li>Help: <em>Create a Job</em>, <em>Job Flows</em>, <em>Import Modes</em>, <em>Best Practices for Import/Export</em>, <em>Troubleshooting Custom Jobs</em></li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/quota/html/API_Quotas.html">API Quotas</a> (Import/Export, I/O, <code>multipleOrdersInCommit</code>)</li>
+  <li>Schema <code>jobs.xsd</code> (<code>b2c docs schema jobs</code>) e o <code>jobs.xml</code> de exemplo do pacote SFRA.</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

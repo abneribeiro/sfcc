@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>08 · Controllers JavaScript · Guia SFCC</title>
+<meta name="description" content="Controllers SFRA a fundo: módulo server, rotas, middleware (https, get, post, include, cache, csrf, login, consent), objetos req e res, viewData, eventos de rota, render, json, redirect, page, remote includes, erros, controllers de sistema e boas práticas.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="08" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Controllers JavaScript</h1>
+  <p class="lead">Controllers são os scripts do servidor que recebem cada request do storefront, orquestram a lógica (models, helpers, serviços) e produzem a resposta: HTML, JSON, XML, redirect ou uma página do Page Designer. Este tema detalha o módulo <code>server</code> do SFRA por dentro: como as rotas são registradas e executadas, o que existe em <code>req</code> e <code>res</code>, cada middleware do base, os eventos de rota, os remote includes, o tratamento de erros e os padrões para escrever controllers novos e modificar os existentes.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<p>Pela documentação: controllers ficam na pasta <code>controllers/</code> no topo do cartridge, têm extensão <code>.js</code> (ou <code>.ds</code>), seguem CommonJS, e os métodos exportados precisam ser <strong>públicos</strong> para atender requests. No SFRA, <code>server.exports()</code> marca as rotas como públicas.</p>
+<dl class="gloss">
+  <dt>Rota</dt><dd>Um nome (<code>Show</code>) associado a uma cadeia de funções. A URL <code>Product-Show</code> = controller <code>Product.js</code> + rota <code>Show</code>.</dd>
+  <dt>Middleware</dt><dd>Cada função <code>(req, res, next)</code> da cadeia. Chama <code>next()</code> para seguir ou <code>next(new Error(…))</code> para abortar.</dd>
+  <dt>req</dt><dd>Objeto do SFRA que embrulha <code>request</code>, <code>customer</code> e <code>session</code> globais (querystring, form, currentCustomer, locale, session…). É congelado (<code>Object.freeze</code>) quando a rota começa.</dd>
+  <dt>res</dt><dd>Objeto do SFRA para montar a resposta: <code>render</code>, <code>json</code>, <code>xml</code>, <code>page</code>, <code>redirect</code>, <code>setViewData</code>, <code>setStatusCode</code>, cache…</dd>
+  <dt>viewData</dt><dd>Objeto acumulado ao longo da cadeia que vira o <code>pdict</code> do ISML ou o corpo do JSON.</dd>
+  <dt>Remote include</dt><dd>Um request separado (com cache próprio) que o Web Adapter junta à página. Rotas desse tipo usam <code>server.middleware.include</code>.</dd>
+</dl>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="primeiro" data-k="cap. 2">
+<h2>O primeiro controller</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/Hello.js">
+'use strict';
+
+var server = require('server');                                   // módulo do cartridge "modules"
+var cache = require('*/cartridge/scripts/middleware/cache');
+
+/**
+ * Hello-World: renderiza um template com uma mensagem.
+ * URL: /on/demandware.store/Sites-RefArch-Site/default/Hello-World?name=Ana
+ */
+server.get('World', cache.applyDefaultCache, function (req, res, next) {
+    var name = req.querystring.name || 'mundo';
+    res.render('hello/world', { message: 'Olá, ' + name + '!' });
+    next();
+});
+
+/** Hello-Json: mesma lógica, resposta JSON (para chamadas AJAX). */
+server.get('Json', function (req, res, next) {
+    res.json({ message: 'Olá, ' + (req.querystring.name || 'mundo') + '!' });
+    next();
+});
+
+module.exports = server.exports();                                // registra as rotas e as torna públicas
+</script>
+<script type="text/plain" class="src" data-lang="isml" data-file="app_custom_acme/cartridge/templates/default/hello/world.isml">
+<isdecorate template="common/layout/page">
+    <div class="container">
+        <h1><isprint value="${pdict.message}" encoding="htmlcontent" /></h1>
+    </div>
+</isdecorate>
+</script>
+<p>Como a documentação descreve a execução: a plataforma acha o primeiro <code>Hello.js</code> no cartridge path; os <code>require</code> do topo rodam; <code>server.exports()</code> registra as rotas; o servidor executa a rota cujo nome bate com a URL.</p>
+<aside class="callout" data-kind="best">
+<p>A documentação recomenda carregar módulos <strong>só quando precisa</strong> ("Only require modules when you need them"). Por isso o SFRA faz <code>require</code> de <code>dw/…</code> dentro da função da rota: um controller com dez rotas não paga o custo dos módulos que só uma delas usa.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="execucao" data-k="cap. 3">
+<h2>Como uma rota é executada por dentro</h2>
+<div class="prose">
+<p>O código do <code>modules/server/route.js</code> mostra a ordem exata:</p>
+<script type="text/plain" class="mmd" data-caption="ciclo de vida de uma rota SFRA">
+sequenceDiagram
+  autonumber
+  participant P as Plataforma
+  participant R as Route (route.js)
+  participant MW as Middlewares da cadeia
+  participant S as server.js (listener)
+  participant V as render.js
+  P->>R: chama a função exportada (Product-Show)
+  R->>R: Object.freeze(req)
+  R-->>R: emit route:Start
+  loop cada passo da cadeia
+    R-->>R: emit route:Step
+    R->>MW: passo(req, res, next)
+    MW-->>R: next() ou next(new Error)
+    Note over R: se res.redirectUrl existe → emit route:Redirect e redirect (interrompe)
+  end
+  R-->>R: emit route:BeforeComplete (forms gravam aqui)
+  R-->>S: emit route:Complete
+  S->>S: cache (setExpires, varyBy) e redirect pendente
+  S->>V: applyRenderings (isml / json / xml / page / print)
+</script>
+<ul>
+  <li><code>server.get</code> e <code>server.post</code> inserem <code>middleware.get</code>/<code>post</code> no início da cadeia; <code>server.use</code> não filtra método.</li>
+  <li>Registrar duas rotas com o mesmo nome no mesmo server lança <em>Route with this name already exists</em>.</li>
+  <li><code>res.render()</code> não renderiza na hora: registra a intenção. A renderização acontece em <code>route:Complete</code>, com o viewData final. Por isso os <code>append</code> de outros cartridges ainda podem alterar os dados.</li>
+  <li>Se mais de um <code>render</code>/<code>json</code> for chamado, vale o último (<code>appendRenderings</code> substitui a renderização anterior).</li>
+  <li>Um <code>res.redirect()</code> interrompe a cadeia no próximo <code>next()</code>.</li>
+  <li><code>next(new Error('…'))</code> loga a mensagem e lança o erro; a plataforma chama o controller de erro (<code>Error-Start</code>).</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="req" data-k="cap. 4">
+<h2>O objeto req</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Propriedade</th><th>Conteúdo</th></tr></thead>
+<tbody>
+<tr><td><code>req.querystring</code></td><td>Parâmetros da URL como objeto (<code>req.querystring.pid</code>)</td></tr>
+<tr><td><code>req.form</code></td><td>Campos do POST (form-urlencoded) como objeto</td></tr>
+<tr><td><code>req.body</code></td><td>Corpo cru do request (ex.: JSON enviado por <code>fetch</code>)</td></tr>
+<tr><td><code>req.httpParameterMap</code></td><td>O <code>dw.web.HttpParameterMap</code> original</td></tr>
+<tr><td><code>req.httpMethod</code>, <code>req.https</code>, <code>req.host</code>, <code>req.path</code>, <code>req.httpHeaders</code>, <code>req.referer</code>, <code>req.remoteAddress</code></td><td>Metadados HTTP</td></tr>
+<tr><td><code>req.includeRequest</code></td><td><code>true</code> quando o request é um remote include</td></tr>
+<tr><td><code>req.currentCustomer</code></td><td><code>{ raw, profile, addressBook, wallet, credentials }</code>. <code>profile</code> só existe se o comprador está logado; <code>raw</code> é o <code>dw.customer.Customer</code></td></tr>
+<tr><td><code>req.locale</code></td><td><code>{ id: 'pt_BR', currency: … }</code></td></tr>
+<tr><td><code>req.session</code></td><td><code>privacyCache</code> (get/set, apagado no logout), <code>raw</code> (o <code>dw.system.Session</code>), <code>currency</code>, <code>setCurrency</code>, <code>clickStream</code></td></tr>
+<tr><td><code>req.geolocation</code></td><td>País, cidade, latitude e longitude estimados pelo IP</td></tr>
+<tr><td><code>req.pageMetaData</code></td><td><code>setTitle</code>, <code>setDescription</code>, <code>setKeywords</code>, <code>addPageMetaTags</code></td></tr>
+<tr><td><code>req.setLocale(id)</code></td><td>Troca o locale da requisição</td></tr>
+</tbody>
+</table>
+<aside class="callout" data-kind="warn">
+<p><code>req</code> é congelado quando a rota começa. Você não consegue acrescentar propriedades nele para passar dados entre passos; para isso use o <code>viewData</code> (<code>res.setViewData</code>). Para algo que precisa sobreviver entre requests, use <code>req.session.privacyCache</code> (dados privados, limpos no logout) ou <code>session.custom</code>.</p>
+</aside>
+<p>A documentação desencoraja usar os globais (<code>request</code>, <code>session</code>, <code>customer</code>) diretamente nos controllers SFRA; prefira <code>req</code> e <code>res</code>.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="res" data-k="cap. 5">
+<h2>O objeto res e os tipos de resposta</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Método</th><th>Efeito</th></tr></thead>
+<tbody>
+<tr><td><code>res.render(template, data)</code></td><td>Mescla <code>data</code> ao viewData e renderiza o ISML no fim (<code>dw.template.ISML.renderTemplate</code>)</td></tr>
+<tr><td><code>res.json(data)</code></td><td>Mescla e responde <code>application/json</code></td></tr>
+<tr><td><code>res.xml(xmlString)</code></td><td>Responde <code>application/xml</code></td></tr>
+<tr><td><code>res.page(pageId, data, aspectAttributes)</code></td><td>Renderiza uma página do Page Designer (<code>PageMgr.renderPage</code>)</td></tr>
+<tr><td><code>res.redirect(url)</code> / <code>res.setRedirectStatus(301)</code></td><td>Redirect (302 por padrão) e interrupção da cadeia</td></tr>
+<tr><td><code>res.getViewData()</code> / <code>res.setViewData(obj)</code></td><td>Lê e mescla (assign) o viewData</td></tr>
+<tr><td><code>res.setStatusCode(404)</code>, <code>res.setContentType(…)</code>, <code>res.setHttpHeader(n, v)</code></td><td>Controle HTTP</td></tr>
+<tr><td><code>res.cachePeriod</code>, <code>res.cachePeriodUnit</code>, <code>res.personalized</code></td><td>Cache da página (normalmente via middleware de cache)</td></tr>
+<tr><td><code>res.print(texto)</code></td><td>Escreve texto cru</td></tr>
+<tr><td><code>res.log(…)</code></td><td>Acumula mensagens que são logadas em caso de erro</td></tr>
+</tbody>
+</table>
+<p>O <code>res</code> do SFRA também aplica cabeçalhos de segurança configurados em <code>config/httpHeadersConf.json</code> do base (<code>Content-Security-Policy: frame-ancestors 'self'</code> e <code>X-Content-Type-Options: nosniff</code>).</p>
+
+<h3 id="exemplo-respostas">As respostas na prática</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/StoreApi.js">
+'use strict';
+
+var server = require('server');
+
+/** JSON para o JavaScript de cliente: horários de uma loja. */
+server.get('Hours', function (req, res, next) {
+    var StoreMgr = require('dw/catalog/StoreMgr');
+    var store = StoreMgr.getStore(req.querystring.storeId || '');
+    if (!store) {
+        res.setStatusCode(404);
+        res.json({ error: true, message: 'loja não encontrada' });
+        return next();
+    }
+    res.json({ id: store.ID, name: store.name, hours: store.storeHours ? store.storeHours.markup : '' });
+    return next();
+});
+
+/** Redirect permanente de uma URL antiga para a página da loja. */
+server.get('Legacy', function (req, res, next) {
+    var URLUtils = require('dw/web/URLUtils');
+    res.setRedirectStatus(301);
+    res.redirect(URLUtils.url('Stores-Find'));
+    next();
+});
+
+/** XML simples (ex.: integração legada que só lê XML). */
+server.get('Ping', function (req, res, next) {
+    res.xml('<status>ok</status>');
+    next();
+});
+
+module.exports = server.exports();
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="middleware" data-k="cap. 6">
+<h2>Middlewares do SFRA</h2>
+<div class="prose">
+<h3 id="mw-server">Filtros do módulo server</h3>
+<table>
+<thead><tr><th>Middleware</th><th>Passa quando</th><th>Senão</th></tr></thead>
+<tbody>
+<tr><td><code>server.middleware.get</code> / <code>post</code></td><td>Método HTTP é GET / POST</td><td><code>next(new Error('Params do not match route'))</code></td></tr>
+<tr><td><code>server.middleware.https</code> / <code>http</code></td><td>Request é (ou não é) HTTPS</td><td>idem</td></tr>
+<tr><td><code>server.middleware.include</code></td><td>É um remote include</td><td>idem: impede o acesso direto pela URL</td></tr>
+</tbody>
+</table>
+
+<h3 id="mw-base">Middlewares do app_storefront_base</h3>
+<table>
+<thead><tr><th>Arquivo</th><th>Funções</th><th>O que fazem</th></tr></thead>
+<tbody>
+<tr><td><code>scripts/middleware/cache.js</code></td><td><code>applyDefaultCache</code> (24h), <code>applyPromotionSensitiveCache</code> (24h, personalizado), <code>applyShortPromotionSensitiveCache</code> (1h, personalizado), <code>applyInventorySensitiveCache</code> (30 min)</td><td>Definem <code>res.cachePeriod</code>, a unidade e <code>personalized</code>; "personalized" vira <code>setVaryBy('price_promotion')</code></td></tr>
+<tr><td><code>scripts/middleware/csrf.js</code></td><td><code>generateToken</code>, <code>validateRequest</code>, <code>validateAjaxRequest</code></td><td>Gera o token no viewData (<code>csrf.tokenName</code>, <code>csrf.token</code>) / valida e, se inválido, faz logout e redireciona para <code>CSRF-Fail</code> ou <code>CSRF-AjaxFail</code></td></tr>
+<tr><td><code>scripts/middleware/userLoggedIn.js</code></td><td><code>validateLoggedIn</code>, <code>validateLoggedInAjax</code></td><td>Sem <code>req.currentCustomer.profile</code>: redireciona para <code>Login-Show</code> (ou status 500 + JSON com <code>redirectUrl</code>)</td></tr>
+<tr><td><code>scripts/middleware/consentTracking.js</code></td><td><code>consent</code></td><td>Põe no viewData o estado de consentimento de rastreamento</td></tr>
+<tr><td><code>scripts/middleware/pageMetaData.js</code></td><td><code>computedPageMetaData</code></td><td>Calcula título, descrição e meta tags para o template (último passo das rotas de página)</td></tr>
+</tbody>
+</table>
+
+<h3 id="rota-protegida">Uma rota protegida completa</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/Loyalty.js">
+'use strict';
+
+var server = require('server');
+var csrfProtection = require('*/cartridge/scripts/middleware/csrf');
+var userLoggedIn = require('*/cartridge/scripts/middleware/userLoggedIn');
+var consentTracking = require('*/cartridge/scripts/middleware/consentTracking');
+
+/** Página de pontos: HTTPS, só logado, sem cache (dado pessoal), com token CSRF para o form de resgate. */
+server.get('Show',
+    server.middleware.https,
+    userLoggedIn.validateLoggedIn,
+    consentTracking.consent,
+    csrfProtection.generateToken,
+    function (req, res, next) {
+        var loyaltyHelpers = require('*/cartridge/scripts/helpers/loyaltyHelpers');
+        var profile = req.currentCustomer.raw.profile;
+        res.render('account/loyalty', {
+            points: loyaltyHelpers.getPoints(profile.customerNo),
+            redeemUrl: require('dw/web/URLUtils').url('Loyalty-Redeem').toString()
+        });
+        next();
+    });
+
+/** Resgate (AJAX): POST, HTTPS, logado, CSRF validado. */
+server.post('Redeem',
+    server.middleware.https,
+    userLoggedIn.validateLoggedInAjax,
+    csrfProtection.validateAjaxRequest,
+    function (req, res, next) {
+        var viewData = res.getViewData();
+        if (!viewData.loggedin) { return next(); } // validateLoggedInAjax já preparou a resposta
+        var loyaltyHelpers = require('*/cartridge/scripts/helpers/loyaltyHelpers');
+        var result = loyaltyHelpers.redeem(req.currentCustomer.raw.profile.customerNo, parseInt(req.form.points, 10));
+        res.json({ success: result.ok, balance: result.balance, message: result.message });
+        return next();
+    });
+
+module.exports = server.exports();
+</script>
+<aside class="callout" data-kind="exam">
+<p>Ordem importa: filtros de acesso (<code>https</code>, <code>validateLoggedIn</code>, <code>validateRequest</code>) vêm <strong>antes</strong> da função principal. Cache vem cedo, porque só define propriedades que o <code>server</code> aplica no fim. Rotas com dados do comprador não recebem cache de página.</p>
+</aside>
+
+<h3 id="middleware-proprio">Escrevendo o seu middleware</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/scripts/middleware/b2bOnly.js">
+'use strict';
+
+/**
+ * Libera a rota só para clientes do customer group "B2B". Reutilizável em qualquer controller:
+ *   server.get('Show', b2bOnly.check, function (req, res, next) { ... })
+ */
+function check(req, res, next) {
+    var URLUtils = require('dw/web/URLUtils');
+    var customer = req.currentCustomer.raw;
+    if (!customer.isMemberOfCustomerGroup('B2B')) {
+        res.redirect(URLUtils.url('Home-Show')); // redirect pendente interrompe a cadeia no next()
+    }
+    next();
+}
+
+module.exports = { check: check };
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="eventos" data-k="cap. 7">
+<h2>Eventos de rota e viewData</h2>
+<div class="prose">
+<p>A documentação lista os eventos emitidos pelo <code>server</code>; todos recebem <code>req</code> e <code>res</code>:</p>
+<table>
+<thead><tr><th>Evento</th><th>Quando</th><th>Uso típico</th></tr></thead>
+<tbody>
+<tr><td><code>route:Start</code></td><td>Antes da cadeia</td><td>Instrumentação</td></tr>
+<tr><td><code>route:Step</code></td><td>Antes de cada passo</td><td>Depuração</td></tr>
+<tr><td><code>route:Redirect</code></td><td>Antes de um redirect</td><td>Limpeza, logs</td></tr>
+<tr><td><code>route:BeforeComplete</code></td><td>Depois de todos os passos, antes da renderização</td><td><strong>Gravar dados de forms no banco</strong>, depois que todos os appends já validaram</td></tr>
+<tr><td><code>route:Complete</code></td><td>Por último</td><td>O <code>server</code> o usa para aplicar cache e renderizar</td></tr>
+</tbody>
+</table>
+<p>O padrão do SFRA para gravar dados (ex.: <code>Account-SaveProfile</code>) é este: o passo principal valida o form e põe o resultado no viewData; a escrita no banco fica num listener de <code>route:BeforeComplete</code>. Assim, um <code>append</code> de outro cartridge pode acrescentar validações e marcar erro antes de qualquer coisa ser gravada.</p>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/Newsletter.js">
+'use strict';
+
+var server = require('server');
+var csrfProtection = require('*/cartridge/scripts/middleware/csrf');
+
+server.post('Subscribe', server.middleware.https, csrfProtection.validateAjaxRequest, function (req, res, next) {
+    var form = server.forms.getForm('newsletter');
+    if (!form.valid) {
+        res.json({ success: false, fields: require('*/cartridge/scripts/formErrors').getFormErrors(form) });
+        return next();
+    }
+    res.setViewData({ email: form.email.value, success: true });
+
+    // a gravação só acontece depois de todos os passos (inclusive appends de outros cartridges)
+    this.on('route:BeforeComplete', function (req2, res2) { // eslint-disable-line no-shadow
+        var viewData = res2.getViewData();
+        if (!viewData.success) return; // um append pode ter invalidado
+        var Transaction = require('dw/system/Transaction');
+        var CustomObjectMgr = require('dw/object/CustomObjectMgr');
+        Transaction.wrap(function () {
+            var co = CustomObjectMgr.getCustomObject('NewsletterSubscription', viewData.email)
+                || CustomObjectMgr.createCustomObject('NewsletterSubscription', viewData.email);
+            co.custom.subscribedAt = new Date();
+        });
+        res2.json({ success: true });
+    });
+    return next();
+});
+
+module.exports = server.exports();
+</script>
+<p>Dentro de um passo, <code>this</code> é o objeto <code>Route</code>, que é um EventEmitter; daí o <code>this.on(…)</code>. O hook <code>app.server.registerRoute</code> (chamado pelo <code>server.js</code> a cada rota registrada) permite assinar eventos de todas as rotas a partir de um cartridge.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="includes" data-k="cap. 8">
+<h2>Remote includes e fragmentos</h2>
+<div class="prose">
+<p>Um remote include é uma rota que devolve um <strong>pedaço</strong> de HTML, chamado pelo Web Adapter como request separado e cacheado à parte. O SFRA usa remote includes no header de conta (<code>Account-Header</code>), no minicart (<code>Cart-MiniCart</code>), no consentimento (<code>ConsentTracking-Check</code>) e nos tiles da PLP (<code>Tile-Show</code>).</p>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/Promo.js">
+'use strict';
+
+var server = require('server');
+var cache = require('*/cartridge/scripts/middleware/cache');
+
+/**
+ * Faixa de promoção personalizada. include: só responde como remote include;
+ * applyShortPromotionSensitiveCache: 1h, variando por preço e promoção.
+ */
+server.get('Banner', server.middleware.include, cache.applyShortPromotionSensitiveCache, function (req, res, next) {
+    var PromotionMgr = require('dw/campaign/PromotionMgr');
+    var promos = PromotionMgr.getActiveCustomerPromotions().getOrderPromotions();
+    res.render('components/promoBanner', { promo: promos.empty ? null : promos.iterator().next() });
+    next();
+});
+
+module.exports = server.exports();
+</script>
+<script type="text/plain" class="src" data-lang="isml" data-file="templates/default/components/header/pageHeader.isml (uso)">
+<iscomment>A página pode ficar cacheada 24h; o banner é buscado e cacheado separadamente pelo Web Adapter.</iscomment>
+<isinclude url="${URLUtils.url('Promo-Banner')}" />
+</script>
+<aside class="callout" data-kind="tip">
+<p>Remote include × local include: <code>&lt;isinclude template="…"/&gt;</code> renderiza outro template <strong>dentro do mesmo request</strong> (mesmo cache, mesmo pdict); <code>&lt;isinclude url="…"/&gt;</code> chama outra <strong>rota</strong> (request novo, cache próprio, sem acesso ao pdict da página). O ISML está no <a class="text-link" href="10-isml.html#includes">tema 10</a>; a performance, no <a class="text-link" href="20-performance.html">tema 20</a>.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="erros" data-k="cap. 9">
+<h2>Erros e controllers de sistema</h2>
+<div class="prose">
+<p>A plataforma chama controllers com nomes reservados em situações especiais. Os do SFRA:</p>
+<table>
+<thead><tr><th>Controller-Rota</th><th>Quando</th><th>O que o SFRA faz</th></tr></thead>
+<tbody>
+<tr><td><code>Default-Start</code></td><td>Acesso à raiz do site</td><td>Renderiza a home (página <code>homepage</code> do Page Designer, se visível)</td></tr>
+<tr><td><code>Default-Offline</code></td><td>Site offline</td><td>Template <code>siteOffline</code></td></tr>
+<tr><td><code>Error-Start</code></td><td>Exceção não tratada</td><td>Status 500; JSON para AJAX ou o template <code>error</code>; detalhes só fora de Production e Staging</td></tr>
+<tr><td><code>Error-ErrorCode</code></td><td>Erros com código (ex.: checkout)</td><td>Mensagem <code>message.error.&lt;código&gt;</code></td></tr>
+<tr><td><code>Home-ErrorNotFound</code></td><td>Página não encontrada</td><td>Status 404 e <code>error/notFound</code></td></tr>
+<tr><td><code>CSRF-Fail</code> / <code>CSRF-AjaxFail</code></td><td>Token CSRF inválido</td><td>Página ou JSON de erro</td></tr>
+</tbody>
+</table>
+<p>A documentação de controllers ainda observa que erros de JavaScript vão para os logs <code>customerror_*</code>; que, por padrão, a plataforma devolve 410 em erros não tratados (404 também serve, desde que o template não use <code>&lt;isslot&gt;</code>, <code>&lt;iscomponent&gt;</code> nem <code>&lt;isinclude&gt;</code>); e que, para tratar explicitamente, use <code>try/catch</code>.</p>
+<script type="text/plain" class="src" data-lang="js" data-file="padrão de tratamento numa rota">
+server.get('Status', function (req, res, next) {
+    var Logger = require('dw/system/Logger').getLogger('orders', 'status');
+    try {
+        var orderStatus = require('*/cartridge/scripts/helpers/orderStatusHelpers').lookup(req.querystring.orderNo);
+        res.json({ ok: true, status: orderStatus });
+    } catch (e) {
+        Logger.error('Falha ao consultar pedido {0}: {1}', req.querystring.orderNo, e.message);
+        res.setStatusCode(503);
+        res.json({ ok: false, message: require('dw/web/Resource').msg('error.status.unavailable', 'order', null) });
+    }
+    next();
+});
+</script>
+<aside class="callout" data-kind="anti">
+<p>A documentação desaconselha controllers chamando outros controllers (risco de dependência circular; aceitável só em casos como chamadas não públicas do checkout) e chamadas a pipelets ou pipelines a partir de controllers. Extraia a lógica comum para um helper em <code>scripts/</code>.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Esquecer <code>next()</code>.</strong> A cadeia para e nada é renderizado (página em branco). Toda função da cadeia precisa chamar <code>next()</code> (ou emitir <code>route:Complete</code> deliberadamente).</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Lógica de negócio pesada no controller.</strong> Controllers orquestram; regras ficam em helpers, models e serviços, que são testáveis e reutilizáveis por jobs e hooks.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Gravar no banco no passo principal</strong> de rotas que outros cartridges estendem. Use <code>route:BeforeComplete</code>.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Cache em rota com dados do comprador</strong> (nome, carrinho, preços personalizados sem <code>personalized</code>). Uma resposta pode ser servida a outra pessoa.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>URL <code>Cart-AddProduct</code> → arquivo <code>controllers/Cart.js</code>, rota <code>AddProduct</code>.</li>
+  <li>"Só via remote include" → <code>server.middleware.include</code>.</li>
+  <li>"Exigir login" → <code>userLoggedIn.validateLoggedIn</code> (página) ou <code>validateLoggedInAjax</code> (AJAX).</li>
+  <li>"Proteger form de CSRF" → <code>csrfProtection.generateToken</code> na rota que renderiza e <code>validateRequest</code>/<code>validateAjaxRequest</code> na que recebe.</li>
+  <li>"Onde gravar dados do form para que extensões validem antes?" → <code>route:BeforeComplete</code>.</li>
+  <li>"Resposta JSON" → <code>res.json()</code>; "acrescentar dados" → <code>res.setViewData()</code>.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>Página em branco, sem erro</td><td>Um passo não chamou <code>next()</code></td><td>Revise cada função da cadeia (inclusive appends).</td></tr>
+<tr><td><code>Params do not match route</code> no log</td><td>Método, HTTPS ou include não batem com o filtro</td><td>Confira o verbo da chamada (GET × POST), HTTPS e se a rota é de include.</td></tr>
+<tr><td>404 numa rota que existe</td><td>Faltou <code>server.exports()</code>; controller com erro de sintaxe (não carregou); nome reservado</td><td>Leia o <code>customerror</code>; confira o export.</td></tr>
+<tr><td><code>Requested template '…' not found</code></td><td>Caminho do <code>res.render</code> errado ou template fora do path</td><td>O caminho é relativo a <code>templates/default</code> (sem extensão).</td></tr>
+<tr><td>Redireciona para <code>CSRF-Fail</code></td><td>Token ausente ou expirado no POST</td><td>Gere o token na rota que renderiza o form e envie <code>csrf_token</code> (o nome vem de <code>tokenName</code>).</td></tr>
+<tr><td>Dados de um comprador aparecem para outro</td><td>Rota pessoal com cache</td><td>Remova o cache da rota ou mova a parte pessoal para um remote include sem cache.</td></tr>
+<tr><td>Alteração no viewData não aparece no JSON</td><td>Um passo posterior sobrescreveu a propriedade; o append do seu cartridge está à direita no path</td><td>Logue o viewData no fim da cadeia; confira o cartridge path.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Criar um controller com <code>server.get</code>/<code>post</code> e <code>server.exports()</code>, e mapear URL → arquivo e rota.</li>
+  <li>Explicar a execução da cadeia: freeze do req, steps, redirect, BeforeComplete, Complete, renderização tardia.</li>
+  <li>Usar <code>req</code> (querystring, form, body, currentCustomer, locale, session.privacyCache) e <code>res</code> (render, json, xml, page, redirect, viewData, status).</li>
+  <li>Aplicar os middlewares de filtro, cache, CSRF, login e consent na ordem certa.</li>
+  <li>Escrever middleware próprio e ouvir <code>route:BeforeComplete</code>.</li>
+  <li>Criar rotas de remote include e saber quando usá-las.</li>
+  <li>Conhecer Default-Start, Error-Start e Home-ErrorNotFound, e tratar erros com try/catch e logs.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Qual URL executa a função registrada por <code>server.get('Details', …)</code> no arquivo <code>controllers/Order.js</code>?</p>
+  <ol class="opts-l"><li><code>…/Order/Details</code></li><li><code>…/Order-Details</code></li><li><code>…/Details-Order</code></li><li><code>…/order.details</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O formato é <code>Controller-Rota</code>.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Uma rota chama <code>res.render('a', {x:1})</code> e depois um append chama <code>res.setViewData({y:2})</code>. O que o template recebe?</p>
+  <ol class="opts-l"><li>Só <code>x</code>, porque o render já aconteceu</li><li><code>x</code> e <code>y</code>, porque a renderização ocorre só em <code>route:Complete</code></li><li>Só <code>y</code></li><li>Erro</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> <code>render</code> registra a intenção; o viewData final é renderizado depois de toda a cadeia.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual middleware garante que uma rota só responda como remote include?</p>
+  <ol class="opts-l"><li><code>server.middleware.https</code></li><li><code>server.middleware.include</code></li><li><code>cache.applyDefaultCache</code></li><li><code>consentTracking.consent</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Ele verifica <code>req.includeRequest</code>.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Onde o SFRA recomenda gravar dados submetidos por um form, para que extensões possam validar antes?</p>
+  <ol class="opts-l"><li>No primeiro passo da cadeia</li><li>Num listener de <code>route:BeforeComplete</code></li><li>No template</li><li>Em <code>route:Start</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> A documentação descreve <code>route:BeforeComplete</code> como o evento usado para gravar dados de forms.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Uma página de "Meus pedidos" usa <code>cache.applyDefaultCache</code>. Qual é o risco?</p>
+  <ol class="opts-l"><li>Nenhum</li><li>Servir a página de um comprador a outro, porque o conteúdo é pessoal e foi cacheado</li><li>A página não carrega em HTTPS</li><li>Erro de CSRF</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Não cacheie conteúdo pessoal; se precisar de cache na página, mova a parte pessoal para um remote include sem cache.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">O que acontece se um passo da cadeia não chamar <code>next()</code> nem renderizar?</p>
+  <ol class="opts-l"><li>A plataforma chama o próximo passo automaticamente</li><li>A cadeia para e nada é renderizado</li><li>Erro 500 imediato</li><li>Redirect para a home</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Sem <code>next()</code>, <code>done()</code> nunca roda e <code>route:Complete</code> nunca é emitido.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Em Production, uma exceção não tratada num controller mostra o quê, no SFRA?</p>
+  <ol class="opts-l"><li>O stack trace completo</li><li>A página de erro genérica, sem detalhes (o <code>Error-Start</code> só mostra detalhes fora de Production e Staging)</li><li>Página em branco</li><li>Um JSON com o erro</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O <code>Error.js</code> do base calcula <code>showError</code> pelo tipo de instância. O detalhe fica no <code>customerror</code> log.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-working-with-controllers.html">Controllers</a>: definição, require, URLs, nomes reservados, depuração, boas práticas.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-sfra-features-and-comps.html">SFRA Features and Components</a>: rotas, middleware, req/res, eventos.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-customizing-sfra.html">Customize SFRA</a>: filtros get/post/https/include.</li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_digital_url_syntax_without_seo.htm&amp;type=5">URL Syntax Without SEO</a></li>
+  <li>Código: <code>modules/server/server.js</code>, <code>route.js</code>, <code>request.js</code>, <code>response.js</code>, <code>render.js</code>, <code>middleware.js</code>; <code>app_storefront_base/cartridge/scripts/middleware/*.js</code>; <code>controllers/Error.js</code>, <code>Default.js</code>, <code>Home.js</code>, <code>Tile.js</code>.</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

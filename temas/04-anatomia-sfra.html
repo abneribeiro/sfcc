@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>04 · Anatomia do SFRA · Guia SFCC</title>
+<meta name="description" content="Estrutura do Storefront Reference Architecture: cartridge stack, app_storefront_base, módulo server, models, page types, como uma página é gerada, busca, cart e checkout, templates, SCSS e JS de cliente, e o impacto de upgrades do SFRA e da plataforma.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="04" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Anatomia do SFRA</h1>
+  <p class="lead">O <strong>Storefront Reference Architecture</strong> é o blueprint oficial de storefront renderizado no servidor. Antes de estendê-lo (temas <a class="text-link" href="06-estender-sfra.html">06</a> e <a class="text-link" href="08-controllers.html">08</a>), você precisa saber onde cada coisa mora: as camadas da pilha de cartridges, o módulo <code>server</code>, os models, os templates, o JavaScript e o SCSS de cliente, como uma página nasce de uma URL, como a busca e o checkout se organizam, e o que acontece com tudo isso quando sai uma versão nova do SFRA ou da plataforma.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>app_storefront_base</dt><dd>O cartridge base do SFRA, mantido pela Salesforce. Tem controllers, models, scripts, forms, templates, JS e SCSS de cliente. <strong>Não se edita.</strong></dd>
+  <dt>modules / server</dt><dd>Um cartridge à parte (<code>modules</code>) com o módulo <code>server</code>, que faz o roteamento no estilo Express. Tudo em <code>modules</code> pode ser carregado com <code>require('nome')</code>, sem caminho, e o cartridge não precisa estar no cartridge path.</dd>
+  <dt>Cartridge stack</dt><dd>A pilha de cartridges no cartridge path: custom → LINK → plugin → base, da esquerda para a direita.</dd>
+  <dt>Controller</dt><dd>Arquivo em <code>cartridge/controllers/</code> que registra rotas (<code>Product-Show</code> = arquivo <code>Product.js</code>, rota <code>Show</code>).</dd>
+  <dt>Model (ViewModel)</dt><dd>Converte objetos da Script API (que às vezes se comportam como objetos Java) em <strong>objetos JavaScript puros e serializáveis</strong>, prontos para o template ou para JSON.</dd>
+  <dt>Decorator</dt><dd>Função que acrescenta propriedades a um model (<code>models/product/decorators/price.js</code> etc.). Também é o nome do template-moldura ISML (<code>&lt;isdecorate&gt;</code>), que é outro conceito.</dd>
+  <dt>Factory</dt><dd>Escolhe e monta o model certo para um caso (ex.: <code>scripts/factories/product.js</code> para full product, tile, set, bundle).</dd>
+  <dt>Middleware</dt><dd>Função <code>(req, res, next)</code> encadeada numa rota: https, cache, CSRF, login obrigatório, consent.</dd>
+  <dt>sgmf-scripts</dt><dd>Ferramentas de linha de comando do SFRA: compilam JS e SCSS (webpack), fazem lint e upload e criam cartridges.</dd>
+</dl>
+<p>O SFRA usa uma variação de MVC: o <strong>controller</strong> recebe o request e orquestra; o <strong>model</strong> busca dados pela Script API e os converte em JSON; a <strong>view</strong> é o ISML (ou a resposta JSON, nas rotas AJAX).</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="stack" data-k="cap. 2">
+<h2>A pilha de cartridges</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Camada</th><th>Para quê</th><th>Exemplos</th></tr></thead>
+<tbody>
+<tr><td><strong>Custom</strong></td><td>Marca, site e regras do negócio. Toda customização de base, plugin e LINK é feita aqui, por overlay.</td><td><code>app_custom_acme</code>, <code>app_custom_acme_br</code></td></tr>
+<tr><td><strong>LINK</strong></td><td>Integrações certificadas de parceiros (pagamento, impostos, reviews).</td><td><code>int_adyen_SFRA</code>, <code>link_bazaarvoice</code></td></tr>
+<tr><td><strong>Plugin</strong></td><td>Features opcionais da Salesforce ou da comunidade.</td><td><code>plugin_wishlists</code>, <code>plugin_giftregistry</code>, <code>plugin_productcompare</code>, <code>plugin_sitemap</code>, <code>plugin-applepay</code></td></tr>
+<tr><td><strong>Base</strong></td><td>Funcionalidade comum à maioria dos sites; alterada só pela Salesforce (ou por PR no GitHub).</td><td><code>app_storefront_base</code></td></tr>
+</tbody>
+</table>
+<p>O cartridge path é sempre lido <strong>da esquerda para a direita</strong>, e vence o primeiro cartridge que tem o arquivo procurado (controller, template, script, recurso estático). Exemplo da documentação:</p>
+<script type="text/plain" class="src" data-lang="text" data-file="Administration > Sites > Manage Sites > (site) > Settings > Cartridges">
+app_custom_mybrand:app_custom_mysite:LINK_bazaarvoice:LINK_wordpress:plugin_applepay:plugin_comparison:app_storefront_base
+</script>
+<script type="text/plain" class="mmd" data-caption="resolução pelo cartridge path: o primeiro que tem o arquivo vence">
+flowchart LR
+  REQ["require('*/cartridge/models/product/fullProduct')<br/>ou template 'product/productDetails'"] --> C1["app_custom_acme"]
+  C1 -- "não tem" --> C2["int_adyen_SFRA"]
+  C2 -- "não tem" --> C3["plugin_wishlists"]
+  C3 -- "não tem" --> C4["app_storefront_base"]
+  C4 -- "tem" --> OK["usa este"]
+  C1 -. "se tivesse, venceria" .-> OK
+</script>
+<aside class="callout" data-kind="exam">
+<p>A documentação afirma: os models do <code>app_storefront_base</code> e os objetos do módulo <code>server</code> têm <strong>compatibilidade garantida entre releases menores</strong>. Editar o base ou o <code>server</code> anula essa garantia e dificulta adotar correções. Para mudar comportamento, crie um cartridge próprio (overlay) à esquerda no path.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="estrutura" data-k="cap. 3">
+<h2>Estrutura do repositório e do base</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="text" data-file="storefront-reference-architecture/">
+storefront-reference-architecture/
+├── dw.json                      # credenciais de upload (fora do Git!)
+├── package.json                 # scripts npm: compile:js, compile:scss, lint, upload…
+├── webpack.config.js            # usa sgmf-scripts para descobrir os entry points
+├── cartridges/
+│   ├── app_storefront_base/
+│   │   ├── package.json         # { "hooks": "./hooks.json" }
+│   │   ├── hooks.json           # dw.order.calculate, app.payment.processor.*, …
+│   │   └── cartridge/
+│   │       ├── app_storefront_base.properties
+│   │       ├── client/default/
+│   │       │   ├── js/          # entry points: main.js, productDetail.js, cart.js, checkout.js, search.js…
+│   │       │   │   ├── product/ cart/ checkout/ components/ …   (módulos importados pelos entries)
+│   │       │   └── scss/        # global.scss, homePage.scss, cart.scss… (_parciais.scss não viram arquivo)
+│   │       ├── controllers/     # Home.js, Product.js, Search.js, Cart.js, Checkout*.js, Account.js, Login.js…
+│   │       ├── experience/      # Page Designer: pages/ e components/ (meta JSON + script)
+│   │       ├── forms/default/   # address.xml, billing.xml, shipping.xml, profile.xml…
+│   │       ├── models/          # cart.js, order.js, account.js, product/ (decorators), search/, price/…
+│   │       ├── scripts/
+│   │       │   ├── middleware/  # cache.js, csrf.js, userLoggedIn.js, consentTracking.js, pageMetaData.js
+│   │       │   ├── helpers/     # basketCalculationHelpers, searchHelpers, productHelpers, hooks…
+│   │       │   ├── factories/   # product.js, price.js, searchRefinements.js
+│   │       │   ├── checkout/ cart/ order/ search/ hooks/ util/
+│   │       │   └── assets.js    # addJs / addCss usados pelos templates
+│   │       ├── static/default/  # SAÍDA do build (js/ e css/) + imagens e fontes
+│   │       └── templates/
+│   │           ├── default/     # common/layout/page.isml, home/, product/, search/, cart/, checkout/…
+│   │           └── resources/   # *.properties (textos localizados)
+│   └── modules/
+│       └── server/              # server.js, route.js, request.js, response.js, middleware.js…
+└── test/                        # unit (mocha + proxyquire) e integration
+</script>
+<aside class="callout" data-kind="note">
+<p>O <code>static/default/js</code> e o <code>static/default/css</code> são <strong>gerados</strong> pelo build a partir de <code>client/</code>. Em projetos reais eles costumam ficar fora do Git e ser gerados no CI antes do upload.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="page-types" data-k="cap. 4">
+<h2>Page types: os controllers e as páginas</h2>
+<div class="prose">
+<p>Cada tipo de página do storefront corresponde a um controller e a um template principal do base:</p>
+<table>
+<thead><tr><th>Página</th><th>Rota (sem SEO URL)</th><th>Template</th><th>Cache padrão</th></tr></thead>
+<tbody>
+<tr><td>Home</td><td><code>Home-Show</code></td><td><code>home/homePage</code> (ou página do Page Designer)</td><td><code>applyDefaultCache</code> (24h)</td></tr>
+<tr><td>Categoria / busca (PLP)</td><td><code>Search-Show?cgid=…</code> / <code>?q=…</code></td><td><code>search/searchResults</code> ou o template da categoria</td><td><code>applyShortPromotionSensitiveCache</code> (1h, personalizado)</td></tr>
+<tr><td>Produto (PDP)</td><td><code>Product-Show?pid=…</code></td><td><code>product/productDetails</code>, <code>setDetails</code>, <code>bundleDetails</code></td><td>sensível a promoção</td></tr>
+<tr><td>Carrinho</td><td><code>Cart-Show</code></td><td><code>cart/cart</code></td><td>sem cache</td></tr>
+<tr><td>Checkout</td><td><code>Checkout-Begin</code></td><td><code>checkout/checkout</code> (layout <code>common/layout/checkout</code>)</td><td>sem cache, HTTPS</td></tr>
+<tr><td>Confirmação</td><td><code>Order-Confirm</code></td><td><code>checkout/confirmation/confirmation</code></td><td>sem cache</td></tr>
+<tr><td>Conta</td><td><code>Account-Show</code>, <code>Login-Show</code></td><td><code>account/accountDashboard</code>, <code>account/login</code></td><td>sem cache, login obrigatório</td></tr>
+<tr><td>Conteúdo</td><td><code>Page-Show?cid=…</code></td><td><code>content/contentAsset/contentAssetPage</code> (ou página do Page Designer)</td><td>24h</td></tr>
+<tr><td>Lojas</td><td><code>Stores-Find</code></td><td><code>storeLocator/storeLocator</code></td><td>—</td></tr>
+</tbody>
+</table>
+<p>Além das páginas, há rotas AJAX (JSON) e de fragmento (remote include): <code>Product-Variation</code>, <code>Cart-AddProduct</code>, <code>Cart-MiniCart</code>, <code>Search-UpdateGrid</code>, <code>Search-Refinebar</code>, <code>Tile-Show</code>, <code>CheckoutServices-SubmitPayment</code>, <code>CheckoutServices-PlaceOrder</code> e outras.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="geracao" data-k="cap. 5">
+<h2>Como uma página é gerada</h2>
+<div class="prose">
+<p>A documentação descreve o caminho de execução de um controller assim:</p>
+<ol class="steps">
+  <li>A URL termina em <code>Controller-Rota</code> (ex.: <code>Product-Show</code>). A plataforma procura <code>controllers/Product.js</code> no cartridge path, da esquerda para a direita. Se não achar controller, procura um pipeline com o mesmo nome.</li>
+  <li>O arquivo é carregado: os <code>require</code> do topo rodam (incluindo <code>require('server')</code>).</li>
+  <li><code>module.exports = server.exports()</code> registra todas as rotas criadas com <code>server.get</code>, <code>server.post</code> e <code>server.use</code>, e o servidor executa a que corresponde a <code>Show</code>.</li>
+  <li>A <strong>cadeia de middleware</strong> roda em ordem; cada passo chama <code>next()</code>.</li>
+  <li>Ao final, o evento <code>route:BeforeComplete</code> dispara (é onde os forms gravam dados) e depois <code>route:Complete</code>, quando o <code>server</code> renderiza o ISML (<code>res.render</code>) ou o JSON (<code>res.json</code>) com o <em>viewData</em> acumulado.</li>
+</ol>
+
+<script type="text/plain" class="mmd" data-caption="Product-Show do request ao HTML">
+sequenceDiagram
+  autonumber
+  participant B as Navegador
+  participant S as server (modules)
+  participant C as Product.js (base ou custom)
+  participant H as productHelpers / ProductFactory
+  participant T as ISML
+  B->>S: GET /…/Product-Show?pid=25686364M
+  S->>C: carrega o controller (primeiro no cartridge path)
+  C->>S: server.exports() registra as rotas
+  S->>C: executa Show: middlewares (cache, consent) e depois a função principal
+  C->>H: showProductPage(querystring, reqPageMetaData)
+  H-->>C: { template, product (model JSON), breadcrumbs, canonicalUrl… }
+  C->>S: res.render('product/productDetails', viewData)
+  S->>S: route:BeforeComplete → route:Complete
+  S->>T: renderiza com pdict = viewData
+  T->>T: <isdecorate template="common/layout/page"> (header, footer, scripts)
+  T-->>B: HTML (+ diretivas de cache para o Web Adapter)
+</script>
+
+<h3 id="decorator-pagina">O decorator de página</h3>
+<p>Quase todo template de página começa com <code>&lt;isdecorate template="common/layout/page"&gt;</code>. O <code>page.isml</code> monta o <code>&lt;head&gt;</code>, o header e o footer (como includes) e coloca o conteúdo da página no lugar de <code>&lt;isreplace/&gt;</code>. Trecho real do base:</p>
+<script type="text/plain" class="src" data-lang="isml" data-file="app_storefront_base/cartridge/templates/default/common/layout/page.isml (trecho)">
+<body>
+    ${dw.system.HookMgr.callHook('app.template.beforeHeader', 'beforeHeader', pdict) || ''}
+    <div class="page" data-action="${pdict.action}" data-querystring="${pdict.queryString}" >
+        <isinclude template="/components/header/pageHeader" />
+        <div role="main" id="maincontent">
+            <isreplace/>
+        </div>
+        <isinclude template="/components/footer/pageFooter" />
+    </div>
+    <iscontentasset aid="cookie_hint" />
+    ${dw.system.HookMgr.callHook('app.template.afterFooter', 'afterFooter', pdict) || ''}
+    <isinclude url="${URLUtils.url('ConsentTracking-Check')}"/>
+</body>
+</script>
+<p>Repare nos hooks <code>app.template.beforeHeader</code> e <code>app.template.afterFooter</code>: são pontos de extensão para injetar tags de terceiros (analytics, chat) sem sobrescrever o <code>page.isml</code>. O comentário do próprio template avisa que o hook roda em páginas cacheadas, então dados privados precisam ir em outro remote include.</p>
+
+<h3 id="assets">CSS e JS por página</h3>
+<p>Cada template declara os assets de que precisa com <code>scripts/assets.js</code>; o <code>common/scripts.isml</code> carrega <code>main.js</code> e depois os scripts registrados:</p>
+<script type="text/plain" class="src" data-lang="isml" data-file="app_storefront_base/cartridge/templates/default/product/productDetails.isml (início)">
+<isdecorate template="common/layout/page">
+    <isscript>
+        var assets = require('*/cartridge/scripts/assets');
+        assets.addJs('/js/productDetail.js');
+        assets.addCss('/css/product/detail.css');
+    </isscript>
+    <isset name="product" value="${pdict.product}" scope="page" />
+    ...
+</isdecorate>
+</script>
+<script type="text/plain" class="src" data-lang="isml" data-file="app_storefront_base/cartridge/templates/default/common/scripts.isml">
+<\script defer type="text/javascript" src="${URLUtils.staticURL('/js/main.js')}"><\/script>
+<isloop items="${ require('*/cartridge/scripts/assets.js').scripts }" var="script">
+    <\script defer type="text/javascript" src="${script.src}"
+        <isif condition="${script.integrity != null}">integrity="${script.integrity}" crossorigin="anonymous"></isif>
+        >
+    <\/script>
+</isloop>
+</script>
+<p><code>URLUtils.staticURL('/js/main.js')</code> resolve o arquivo pelo cartridge path (o primeiro <code>static/default/js/main.js</code> encontrado) e devolve uma URL com o fingerprint da code version.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="busca" data-k="cap. 6">
+<h2>Busca e listagem (PLP)</h2>
+<div class="prose">
+<p>Busca por palavra-chave e navegação por categoria passam pelo mesmo controller, <code>Search-Show</code>, que usa o <strong>índice de busca</strong> via <code>dw.catalog.ProductSearchModel</code>, nunca consultas ao banco.</p>
+<script type="text/plain" class="mmd" data-caption="Search-Show no SFRA">
+flowchart TB
+  A["Search-Show?cgid=mulher&amp;prefn1=color&amp;prefv1=Azul&amp;srule=preco"] --> B{"categoria tem página<br/>do Page Designer?"}
+  B -- "sim" --> PD["res.page(pageId)<br/>(category landing page)"]
+  B -- "não" --> C["searchHelper.search(req, res)"]
+  C --> D["new ProductSearchModel()<br/>setupSearch: cgid, q, refinements,<br/>sorting rule, paginação"]
+  D --> E["apiProductSearch.search()<br/>(índice)"]
+  E --> F["models/search/productSearch<br/>(refinements, sorting options, hits → tiles)"]
+  F --> G{"search redirect?<br/>(BM: Search Redirects)"}
+  G -- "sim" --> R["res.redirect"]
+  G -- "não" --> H["res.render('search/searchResults')<br/>ou o template da categoria"]
+</script>
+<ul>
+  <li><strong>Refinements</strong> (filtros) vêm das refinement definitions da categoria (herdadas da raiz) e aparecem na barra lateral via <code>Search-Refinebar</code> (cacheada).</li>
+  <li><strong>Sorting</strong>: opções de ordenação do BM (<code>CatalogMgr.getSortingOptions()</code>) e a regra padrão da categoria.</li>
+  <li><strong>Paginação e "mais resultados"</strong>: <code>Search-UpdateGrid</code> devolve só a grade.</li>
+  <li><strong>Tiles</strong>: cada produto na grade é um remote include de <code>Tile-Show</code> (cacheado), uma das peças de performance do SFRA.</li>
+  <li><strong>Search suggestions</strong> (autocomplete): <code>SearchServices-GetSuggestions</code>.</li>
+  <li><strong>Conteúdo</strong>: a aba de artigos usa <code>Search-Content</code> com <code>ContentSearchModel</code>.</li>
+</ul>
+<aside class="callout" data-kind="exam">
+<p>Configuração de busca (searchable attributes, sinônimos, search redirects, refinements, sorting rules) é feita no <strong>BM</strong> (<em>Merchant Tools &gt; Search</em>). Depois de mudar atributos pesquisáveis ou refinements, o <strong>índice precisa ser reconstruído</strong>. Código customizado só entra quando a necessidade não é atendida por configuração.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="cart-checkout" data-k="cap. 7">
+<h2>Cart e checkout no SFRA</h2>
+<div class="prose">
+<p>O fluxo detalhado (promoções, hooks, pagamento, criação do pedido) está no <a class="text-link" href="03-promocoes-carrinho-checkout.html#checkout">tema 03</a>. Aqui, o mapa das peças:</p>
+<table>
+<thead><tr><th>Peça</th><th>Arquivos no base</th></tr></thead>
+<tbody>
+<tr><td>Controllers</td><td><code>Cart.js</code>, <code>Checkout.js</code> (Begin), <code>CheckoutShippingServices.js</code>, <code>CheckoutServices.js</code> (SubmitPayment, PlaceOrder), <code>CheckoutAddressServices.js</code>, <code>Order.js</code> (Confirm, History)</td></tr>
+<tr><td>Models</td><td><code>cart.js</code>, <code>totals.js</code>, <code>productLineItems.js</code>, <code>shipping.js</code>, <code>billing.js</code>, <code>payment.js</code>, <code>order.js</code></td></tr>
+<tr><td>Helpers</td><td><code>scripts/cart/cartHelpers.js</code>, <code>scripts/checkout/checkoutHelpers.js</code>, <code>shippingHelpers.js</code>, <code>basketCalculationHelpers.js</code>, <code>basketValidationHelpers.js</code></td></tr>
+<tr><td>Hooks</td><td><code>dw.order.calculate</code> (+ Shipping/Tax), <code>app.payment.processor.*</code>, <code>app.validate.order</code>, <code>app.fraud.detection</code>, <code>app.post.auth</code></td></tr>
+<tr><td>Forms</td><td><code>shipping.xml</code>, <code>billing.xml</code>, <code>creditCard.xml</code>, <code>address.xml</code>, <code>coCustomer.xml</code></td></tr>
+<tr><td>Cliente</td><td><code>client/default/js/checkout.js</code> → <code>checkout/checkout.js</code>, <code>shipping.js</code>, <code>billing.js</code>; <code>cart.js</code> → <code>cart/cart.js</code></td></tr>
+</tbody>
+</table>
+<p>O checkout é uma página única com estágios (<em>shipping</em>, <em>payment</em>, <em>placeOrder</em>) controlados no cliente; cada submissão é um POST AJAX que devolve JSON com o model atualizado (ou com <code>fieldErrors</code> e <code>serverErrors</code>).</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="cliente" data-k="cap. 8">
+<h2>JavaScript e SCSS de cliente</h2>
+<div class="prose">
+<p>O JS de cliente usa CommonJS (<code>require</code>), jQuery e Bootstrap, e é empacotado pelo webpack via <code>sgmf-scripts</code>. As regras de descoberta do <code>sgmf-scripts</code> (em <code>lib/helpers.js</code>) são:</p>
+<ul>
+  <li><strong>JS</strong>: cada arquivo <code>client/&lt;locale&gt;/js/*.js</code> (só o primeiro nível) é um <strong>entry point</strong> e vira <code>static/&lt;locale&gt;/js/&lt;nome&gt;.js</code>. Subpastas (<code>product/</code>, <code>components/</code>) são módulos importados.</li>
+  <li><strong>SCSS</strong>: todo <code>.scss</code> em <code>client/&lt;locale&gt;/scss/**</code> que <strong>não começa com <code>_</code></strong> vira <code>static/&lt;locale&gt;/css/…/&lt;nome&gt;.css</code>. Parciais (<code>_variables.scss</code>) só são importados.</li>
+  <li><strong>Aliases</strong>: o <code>package.json</code> do seu cartridge declara <code>"paths": { "base": "../storefront-reference-architecture/cartridges/app_storefront_base/" }</code>, e então <code>require('base/product/detail')</code> ou <code>@import "~base/variables"</code> apontam para o base.</li>
+</ul>
+<script type="text/plain" class="src" data-lang="js" data-file="app_storefront_base/cartridge/client/default/js/productDetail.js (entry point)">
+'use strict';
+
+var processInclude = require('./util');
+
+$(document).ready(function () {
+    processInclude(require('./product/detail'));
+});
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="app_storefront_base/cartridge/client/default/js/util.js">
+'use strict';
+
+// executa uma função, ou todas as funções de um objeto exportado
+module.exports = function (include) {
+    if (typeof include === 'function') {
+        include();
+    } else if (typeof include === 'object') {
+        Object.keys(include).forEach(function (key) {
+            if (typeof include[key] === 'function') {
+                include[key]();
+            }
+        });
+    }
+};
+</script>
+
+<h3 id="cliente-custom">Estendendo o JS de cliente num cartridge próprio</h3>
+<script type="text/plain" class="src" data-lang="json" data-file="app_custom_acme/package.json">
+{
+    "name": "app_custom_acme",
+    "paths": {
+        "base": "../storefront-reference-architecture/cartridges/app_storefront_base/"
+    },
+    "scripts": {
+        "compile:js": "sgmf-scripts --compile js",
+        "compile:scss": "sgmf-scripts --compile css",
+        "uploadCartridge": "sgmf-scripts --uploadCartridge app_custom_acme"
+    }
+}
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/client/default/js/product/detail.js">
+'use strict';
+
+var base = require('base/product/detail'); // o detail.js do app_storefront_base
+
+/** Novo comportamento: rastreia a troca de variação. */
+base.trackVariationChange = function () {
+    $('body').on('product:afterAttributeSelect', function (e, response) {
+        window.dataLayer = window.dataLayer || [];
+        window.dataLayer.push({ event: 'variation_change', pid: response.data.product.id });
+    });
+};
+
+module.exports = base; // productDetail.js do custom passa a usar este módulo
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/client/default/js/productDetail.js">
+'use strict';
+
+var processInclude = require('base/util');
+
+$(document).ready(function () {
+    processInclude(require('./product/detail')); // o módulo estendido acima
+});
+</script>
+<aside class="callout" data-kind="warn">
+<p>O <code>static/default/js/productDetail.js</code> do seu cartridge é um bundle <strong>completo</strong> que substitui o do base (o cartridge path resolve <code>/js/productDetail.js</code> para o seu). Por isso o seu entry point reimporta tudo o que a página precisa. Sem o entry point no seu cartridge, a alteração não entra em vigor.</p>
+</aside>
+
+<h3 id="scss">SCSS</h3>
+<script type="text/plain" class="src" data-lang="scss" data-file="app_custom_acme/cartridge/client/default/scss/global.scss">
+// reaproveita todo o global do base e só sobrescreve variáveis e componentes da marca
+@import "variables";               // _variables.scss deste cartridge (cores da marca)
+@import "~base/global";            // global.scss do app_storefront_base
+
+.btn-primary {
+    background-color: $brand-primary;
+    border-color: $brand-primary;
+}
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="upgrades" data-k="cap. 9">
+<h2>O que muda quando o SFRA ou a plataforma é atualizado</h2>
+<div class="prose">
+<h3 id="upgrade-sfra">Atualizações do SFRA</h3>
+<p>O SFRA segue <strong>versionamento semântico</strong> (<code>vMAJOR.MINOR.PATCH</code>): major quebra compatibilidade, minor traz features compatíveis, patch traz correções. Todos os repositórios (base, plugins, <code>storefrontdata</code>) recebem tags iguais, e só as versões marcadas como <em>release</em> no GitHub foram testadas em conjunto com os plugins. A documentação recomenda fazer checkout da mesma tag em todos os repositórios.</p>
+<table>
+<thead><tr><th>Elemento</th><th>Impacto típico de um upgrade</th><th>Como reduzir o atrito</th></tr></thead>
+<tbody>
+<tr><td>Controllers</td><td>Rotas novas ou ajustadas; middlewares diferentes</td><td>Estenda com <code>append</code>/<code>prepend</code> em vez de <code>replace</code>; você herda as mudanças.</td></tr>
+<tr><td>Models</td><td>Propriedades novas (as existentes mantêm a estrutura entre minors)</td><td>Use <code>module.superModule</code> e acrescente propriedades.</td></tr>
+<tr><td>Templates</td><td>O base muda HTML e classes; a <strong>sua cópia sobrescrita não muda</strong></td><td>Sobrescreva o menor template possível (um componente, não a página).</td></tr>
+<tr><td>JS e SCSS de cliente</td><td>Módulos e eventos mudam</td><td>Estenda módulos com <code>require('base/…')</code>; recompile sempre.</td></tr>
+<tr><td>Dependências npm</td><td>Versões de webpack, sass e sgmf mudam</td><td>Rode <code>npm install</code> a cada versão nova (a documentação exige).</td></tr>
+<tr><td>Dados de demo</td><td><code>storefrontdata</code> muda junto</td><td>Use a mesma tag.</td></tr>
+</tbody>
+</table>
+<p>O procedimento de upgrade em si: substitua os diretórios do base e dos plugins pela tag nova, rode <code>npm install</code>, recompile, rode lint e testes, compare as sobrescritas de templates com as versões novas do base, suba numa sandbox e teste os fluxos críticos.</p>
+
+<h3 id="upgrade-plataforma">Atualizações da plataforma B2C Commerce</h3>
+<ul>
+  <li>As <strong>releases</strong> chegam primeiro às sandboxes (preview) e depois ao PIG (veja a tabela de instâncias no <a class="text-link" href="01-arquitetura.html#instancias">tema 01</a>). Leia as release notes e teste nas sandboxes.</li>
+  <li>A Script API evolui com <strong>compatibility modes</strong>: comportamentos que quebram compatibilidade só valem quando a code version passa para o modo novo. Você decide quando subir o modo e testa antes.</li>
+  <li>APIs são <strong>depreciadas</strong> antes de removidas; o log de deprecação e a documentação apontam o que trocar.</li>
+  <li>Configurações de BM novas (feature switches) podem chegar desligadas.</li>
+</ul>
+<aside class="callout" data-kind="best">
+<p>Um projeto que nunca editou o <code>app_storefront_base</code> faz o upgrade trocando uma pasta e reexecutando o build. Cada linha alterada no base vira um merge manual no próximo upgrade. Essa é a razão prática da regra "não edite o base".</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Editar <code>app_storefront_base</code> ou <code>modules/server</code>.</strong> Anula a garantia de compatibilidade e transforma cada upgrade em merge manual.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Copiar o controller inteiro do base para o custom.</strong> Você deixa de receber correções. Use <code>server.extend(module.superModule)</code> com <code>append</code>/<code>prepend</code> (<a class="text-link" href="06-estender-sfra.html">tema 06</a>).</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Editar arquivos em <code>static/default/js</code>.</strong> São gerados; o próximo build sobrescreve. Edite <code>client/</code> e recompile.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Consultar o banco para montar a PLP.</strong> A listagem usa o índice (<code>ProductSearchModel</code>), que é rápido e respeita refinements, sorting e promoções.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>"Ordem de resolução do cartridge path" → <strong>esquerda para a direita, o primeiro vence</strong>.</li>
+  <li>"O que o model faz no SFRA?" → converte objetos da Script API em <strong>JSON serializável</strong> para template ou AJAX.</li>
+  <li>"Como requerer o módulo server?" → <code>require('server')</code>, sem caminho, porque está em <code>modules</code>.</li>
+  <li>"Qual evento grava dados de forms antes da renderização?" → <code>route:BeforeComplete</code>.</li>
+  <li>"Qual arquivo SCSS não gera CSS?" → os que começam com <code>_</code> (parciais).</li>
+  <li>"Bootstrap de qual versão?" → a documentação atual de compliance cita <strong>Bootstrap 5</strong> (versões antigas do SFRA usavam Bootstrap 4).</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>Mudança no controller custom não tem efeito</td><td>Cartridge fora do path ou à direita do base; code version errada ativa</td><td>Confira o cartridge path do site e a code version ativa (<em>Code Deployment</em>).</td></tr>
+<tr><td>Mudança no JS de cliente não aparece</td><td>Não recompilou; o entry point não existe no custom; cache do navegador ou do eCDN</td><td>Rode <code>npm run compile:js</code>, confira <code>static/default/js</code> no cartridge e faça upload; force reload.</td></tr>
+<tr><td>CSS do base sumiu</td><td>O <code>global.scss</code> do custom não importa o do base</td><td>Use <code>@import "~base/global";</code> e configure <code>paths.base</code>.</td></tr>
+<tr><td><code>Cannot find module 'base/…'</code> no build</td><td><code>paths</code> ausente ou caminho relativo errado no <code>package.json</code></td><td>Repositórios clonados como irmãos (siblings) e <code>paths.base</code> apontando para o base.</td></tr>
+<tr><td>"Controller not found" ou 404 em rota nova</td><td>Faltou <code>module.exports = server.exports()</code>; erro de sintaxe no arquivo</td><td>Leia o error log; confira o export.</td></tr>
+<tr><td>PLP vazia depois de importar o catálogo</td><td>Índice não reconstruído; categoria não online</td><td>Reconstrua o índice em <em>Search Indexes</em>.</td></tr>
+<tr><td>Depois de um upgrade, layout quebrado em uma página</td><td>Template sobrescrito antigo, com HTML incompatível</td><td>Diff entre a sobrescrita e o template novo do base; reduza a sobrescrita.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Nomear as camadas da pilha (custom, LINK, plugin, base) e a regra de resolução do cartridge path.</li>
+  <li>Descrever as pastas do base: controllers, models, scripts (middleware, helpers, factories), forms, templates, client, static, experience.</li>
+  <li>Relacionar cada page type a controller, rota e template.</li>
+  <li>Explicar a execução de um controller: <code>server.exports()</code>, middleware, <code>route:BeforeComplete</code> e <code>route:Complete</code>.</li>
+  <li>Saber como o <code>page.isml</code> decora as páginas e como os assets são adicionados.</li>
+  <li>Descrever <code>Search-Show</code>, refinements, sorting, tiles e o uso do índice.</li>
+  <li>Explicar o build de JS e SCSS (entry points, parciais, aliases <code>base/</code>).</li>
+  <li>Avaliar o impacto de upgrades do SFRA (semver, tags) e da plataforma (releases, compatibility mode).</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">O cartridge path é <code>app_custom:plugin_wishlists:app_storefront_base</code>. Os três têm <code>templates/default/product/productDetails.isml</code>. Qual é usado?</p>
+  <ol class="opts-l"><li>O do <code>app_storefront_base</code></li><li>O do <code>app_custom</code></li><li>O do <code>plugin_wishlists</code></li><li>Todos são mesclados</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> A busca é feita da esquerda para a direita, e o primeiro que tem o arquivo vence.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual afirmação sobre os models do SFRA é verdadeira?</p>
+  <ol class="opts-l"><li>São objetos da Script API passados direto ao template</li><li>Convertem objetos da Script API em objetos JavaScript puros e serializáveis</li><li>Ficam no cartridge <code>modules</code></li><li>São gerados pelo webpack</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> A documentação define o ViewModel como um objeto JS serializável que combina dados de vários objetos da Script API.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Você criou <code>client/default/scss/_brand.scss</code> e <code>client/default/scss/brand.scss</code>. O que o build gera?</p>
+  <ol class="opts-l"><li>Os dois CSS</li><li>Só <code>static/default/css/brand.css</code></li><li>Nenhum</li><li>Só <code>_brand.css</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O <code>sgmf-scripts</code> ignora arquivos que começam com <code>_</code>; eles são parciais importados por outros.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Por que a Salesforce recomenda não modificar o <code>app_storefront_base</code>?</p>
+  <ol class="opts-l"><li>O arquivo é somente leitura no servidor</li><li>Para manter a compatibilidade garantida entre releases e facilitar upgrades e correções</li><li>Porque o base não pode ser enviado por WebDAV</li><li>Porque o base roda em outro motor de script</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Editar o base ou o módulo <code>server</code> anula a garantia de compatibilidade e transforma upgrades em merges manuais.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Onde o SFRA busca os produtos de uma PLP?</p>
+  <ol class="opts-l"><li><code>ProductMgr.queryAllSiteProducts()</code></li><li>No índice de busca, via <code>ProductSearchModel</code></li><li>Num custom object</li><li>Na OCAPI</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> <code>Search-Show</code> usa <code>ProductSearchModel</code> sobre o índice. <code>queryAllSiteProducts</code> é para jobs.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Num upgrade do SFRA de v6.1.0 para v6.3.0, o que a semver garante?</p>
+  <ol class="opts-l"><li>Nada</li><li>Features novas compatíveis com a major 6</li><li>Quebra de compatibilidade</li><li>Só correções de segurança</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Minor = funcionalidade nova compatível dentro da major. Mesmo assim, templates sobrescritos precisam de revisão manual.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Você precisa injetar um script de analytics em todas as páginas sem sobrescrever o <code>page.isml</code>. O que usar?</p>
+  <ol class="opts-l"><li>Editar o <code>page.isml</code> do base</li><li>Registrar o hook <code>app.template.afterFooter</code> (ou <code>beforeHeader</code>) num cartridge próprio</li><li>Usar <code>OnRequest</code></li><li>Um job</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O <code>page.isml</code> chama esses hooks justamente para extensões. Lembre que eles rodam em páginas cacheadas.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-sfra-features-and-comps.html">SFRA Features and Components</a>: arquitetura, camadas, server, ViewModels, eventos.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-sfra-modules.html">SFRA Modules</a></li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-build-sfra.html">Get Started with SFRA</a>: repositórios, npm, build, upload.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-sfra-versions.html">SFRA Versions and Releases</a>: semver, tags, releases.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-sfra-standards-compliance.html">SFRA Standards Compliance</a>: Bootstrap 5, navegadores.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-customizing-sfra.html">Customize SFRA</a></li>
+  <li><a class="text-link" href="https://github.com/SalesforceCommerceCloud/sgmf-scripts">sgmf-scripts</a>: <code>lib/helpers.js</code> define os entry points de JS e SCSS.</li>
+  <li>Código do SFRA: <code>templates/default/common/layout/page.isml</code>, <code>common/scripts.isml</code>, <code>scripts/assets.js</code>, <code>controllers/Search.js</code>, <code>scripts/helpers/searchHelpers.js</code>, <code>client/default/js/*</code>.</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

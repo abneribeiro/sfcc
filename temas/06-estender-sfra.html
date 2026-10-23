@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>06 · Implementar e estender o SFRA · Guia SFCC</title>
+<meta name="description" content="Como implementar sobre o SFRA sem editar o base: decidir entre configuração, plugin, extensão ou código novo; server.extend, append, prepend, replace; module.superModule em models e scripts; sobrescrita de templates, forms e resource bundles; plugins.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="06" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Implementar e estender o SFRA</h1>
+  <p class="lead">Implementar um site sobre o SFRA é decidir, requisito a requisito, <strong>quanto código escrever</strong>. Primeiro: isso se resolve com configuração? Existe plugin ou LINK? Se for preciso código, dá para <em>estender</em> o que existe, ou é necessário <em>substituir</em>? Este tema dá os critérios dessa decisão e as técnicas oficiais de extensão: <code>server.extend</code> com <code>append</code>, <code>prepend</code> e <code>replace</code>; <code>module.superModule</code>; sobrescrita de templates, forms e textos; e o padrão dos plugins.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>Overlay</dt><dd>Um cartridge seu, à esquerda do base no cartridge path, com arquivos de mesmo nome e caminho que "cobrem" os do base.</dd>
+  <dt>module.superModule</dt><dd>Dentro de um módulo, aponta para o módulo de <strong>mesmo nome e mesmo caminho</strong> no próximo cartridge à direita do atual. É a base de toda extensão: controllers, models, helpers, scripts.</dd>
+  <dt>server.extend(x)</dt><dd>Copia as rotas do controller <code>x</code> (normalmente <code>module.superModule</code>) para o <code>server</code> atual, para que você possa modificá-las.</dd>
+  <dt>append</dt><dd>Acrescenta passos ao <strong>fim</strong> da cadeia de uma rota existente. A cadeia original roda inteira antes.</dd>
+  <dt>prepend</dt><dd>Acrescenta passos ao <strong>início</strong> da cadeia.</dd>
+  <dt>replace</dt><dd>Descarta a cadeia original da rota e registra uma nova.</dd>
+  <dt>viewData</dt><dd>O objeto acumulado que vira o <code>pdict</code> do template (ou o JSON). Lido com <code>res.getViewData()</code> e alterado com <code>res.setViewData()</code>.</dd>
+  <dt>Plugin cartridge</dt><dd>Cartridge que adiciona uma feature inteira por extensão (wishlists, gift registry), sem tocar no base.</dd>
+</dl>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="decidir" data-k="cap. 2">
+<h2>Customizar ou usar o que já existe?</h2>
+<div class="prose">
+<p>O item A6 do exame pede exatamente esta habilidade: entender os componentes do SFRA e da plataforma para decidir quando escrever código. A ordem de preferência:</p>
+<script type="text/plain" class="mmd" data-caption="a escada de decisão (suba só quando o degrau de baixo não resolve)">
+flowchart TB
+  R["Requisito do negócio"] --> Q1{"Resolve com configuração<br/>de BM?"}
+  Q1 -- "sim" --> A1["Configure: promoções, price books, slots,<br/>Page Designer, busca, site preferences,<br/>shipping, pagamento, URL rules"]
+  Q1 -- "não" --> Q2{"Existe plugin oficial<br/>ou LINK certificado?"}
+  Q2 -- "sim" --> A2["Instale o plugin/LINK<br/>(e estenda-o se preciso)"]
+  Q2 -- "não" --> Q3{"Existe ponto de extensão?<br/>(hook app.*, append, superModule)"}
+  Q3 -- "sim" --> A3["Estenda sem copiar código"]
+  Q3 -- "não" --> Q4{"O comportamento base<br/>precisa deixar de rodar?"}
+  Q4 -- "sim" --> A4["replace da rota / sobrescrita<br/>do menor template possível"]
+  Q4 -- "não" --> A5["Rota, model ou cartridge novo"]
+</script>
+<table>
+<thead><tr><th>Requisito</th><th>Solução recomendada</th><th>Por quê</th></tr></thead>
+<tbody>
+<tr><td>"10% em calçados no fim de semana"</td><td>Promoção numa campanha (BM)</td><td>O merchandiser opera sozinho; respeita exclusividade; aparece em relatórios.</td></tr>
+<tr><td>"Banner sazonal na home"</td><td>Content slot ou Page Designer</td><td>Agendamento e conteúdo sem deploy.</td></tr>
+<tr><td>"Preço especial para B2B"</td><td>Price book + customer group/campanha</td><td>Funciona no índice, na OCAPI/SCAPI e nos impostos.</td></tr>
+<tr><td>"Lista de desejos"</td><td><code>plugin_wishlists</code></td><td>Feature pronta, testada e versionada com o SFRA.</td></tr>
+<tr><td>"Pagamento com o gateway X"</td><td>Cartridge LINK do gateway</td><td>Certificado; segue o padrão de hooks de pagamento.</td></tr>
+<tr><td>"Mostrar selo 'eco' na PDP a partir de um atributo"</td><td>Atributo custom + extensão do model + sobrescrita do componente de template</td><td>Pequena extensão; o restante do base continua intacto.</td></tr>
+<tr><td>"Validar CPF no checkout"</td><td>Extensão do form XML + validação no controller (append ou <code>app.validate.order</code>)</td><td>Ponto de extensão existe.</td></tr>
+<tr><td>"PDP com cálculo de frete que chama um serviço externo"</td><td>Rota nova AJAX (ou <code>replace</code>, se for trocar a chamada existente)</td><td>Evita chamar o serviço duas vezes com <code>append</code>.</td></tr>
+</tbody>
+</table>
+<aside class="callout" data-kind="best">
+<p>Critérios para justificar código: (1) a configuração não atende; (2) o código <strong>estende</strong> em vez de copiar; (3) não degrada performance (cache, quotas); (4) o merchandiser continua autônomo; (5) o upgrade do SFRA continua barato.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="cartridge-custom" data-k="cap. 3">
+<h2>O seu cartridge de customização</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal">
+mkdir acme-storefront && cd acme-storefront
+npm install sgmf-scripts
+npx sgmf-scripts --createCartridge app_custom_acme   # cria cartridges/app_custom_acme, package.json, dw.json…
+npm install
+</script>
+<script type="text/plain" class="src" data-lang="json" data-file="acme-storefront/package.json (trecho)">
+{
+    "name": "app_custom_acme",
+    "paths": {
+        "base": "../storefront-reference-architecture/cartridges/app_storefront_base/",
+        "wishlists": "../plugin_wishlists/cartridges/plugin_wishlists/"
+    }
+}
+</script>
+<p>No cartridge path, o seu cartridge vai à esquerda de tudo o que ele estende:</p>
+<script type="text/plain" class="src" data-lang="text" data-file="Cartridges do site">
+app_custom_acme:plugin_wishlists:lib_productlist:app_storefront_base
+</script>
+<aside class="callout" data-kind="tip">
+<p>A documentação sugere separar as customizações por responsabilidade quando houver vários sites: um cartridge da marca (<code>app_custom_acme</code>) e um por site ou região (<code>app_custom_acme_br</code>), à esquerda dele. Assim a maior parte da pilha é reaproveitada.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="controllers" data-k="cap. 4">
+<h2>Estendendo controllers: extend, append, prepend, replace</h2>
+<div class="prose">
+<p>O padrão sempre começa igual: um arquivo com o <strong>mesmo nome</strong> do controller do base (ex.: <code>controllers/Product.js</code>), que herda as rotas dele:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/Product.js">
+'use strict';
+
+var server = require('server');
+server.extend(module.superModule); // copia todas as rotas do próximo Product.js à direita no path
+
+// ... append / prepend / replace / novas rotas aqui
+
+module.exports = server.exports();
+</script>
+<p>O que cada método faz, conforme o código real do <code>modules/server/server.js</code>:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="modules/server/server.js (trechos)">
+prepend: function prepend(name) {
+    // ...
+    this.routes[name].chain = middlewareChain.concat(this.routes[name].chain); // novos passos ANTES
+},
+append: function append(name) {
+    // ...
+    this.routes[name].chain = this.routes[name].chain.concat(middlewareChain); // novos passos DEPOIS
+},
+replace: function replace(name) {
+    // ...
+    delete this.routes[name];          // joga fora a cadeia original
+    this.use.apply(this, arguments);   // registra a nova com server.use (sem filtro GET/POST automático!)
+},
+</script>
+
+<script type="text/plain" class="mmd" data-caption="cadeia da rota depois de prepend + append">
+flowchart LR
+  P["prepend<br/>(seu passo)"] --> G["middleware.get<br/>(do server.get original)"]
+  G --> M1["cache.applyPromotionSensitiveCache"]
+  M1 --> F["função principal do base<br/>(res.render + viewData)"]
+  F --> A["append<br/>(seu passo: lê/ajusta viewData)"]
+  A --> E["route:BeforeComplete<br/>route:Complete → render"]
+</script>
+
+<h3 id="append">append: acrescentar dados à página</h3>
+<p>O uso mais comum. A função principal do base já chamou <code>res.render(...)</code>, mas a renderização só acontece em <code>route:Complete</code>, depois de todos os passos. Por isso o seu passo ainda consegue mexer no <em>viewData</em>:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/Product.js">
+'use strict';
+
+var server = require('server');
+server.extend(module.superModule);
+
+server.append('Show', function (req, res, next) {
+    var viewData = res.getViewData();
+    var product = viewData.product; // model criado pelo base
+
+    if (product && product.raw) { // raw = o dw.catalog.Product (decorator "raw")
+        viewData.ecoBadge = product.raw.custom.isEcoFriendly === true;
+    }
+    res.setViewData(viewData);
+    next();
+});
+
+module.exports = server.exports();
+</script>
+
+<h3 id="prepend">prepend: guarda antes da lógica original</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/Cart.js">
+'use strict';
+
+var server = require('server');
+server.extend(module.superModule);
+
+/** Bloqueia adicionar ao carrinho produtos marcados como "somente loja física". */
+server.prepend('AddProduct', function (req, res, next) {
+    var ProductMgr = require('dw/catalog/ProductMgr');
+    var Resource = require('dw/web/Resource');
+    var product = ProductMgr.getProduct(req.form.pid);
+
+    if (product && product.custom.storeOnly === true) {
+        res.json({ error: true, message: Resource.msg('error.store.only', 'cart', null) });
+        // encerra a rota: sem chamar next(), os passos seguintes (inclusive o original) não rodam
+        return this.emit('route:Complete', req, res);
+    }
+    return next();
+});
+
+module.exports = server.exports();
+</script>
+<aside class="callout" data-kind="verify">
+<p>Interromper a cadeia emitindo <code>route:Complete</code> é um padrão comum em projetos SFRA (a rota é o <code>this</code> dentro do middleware, e o <code>server</code> escuta esse evento para renderizar). Ele depende de detalhes internos do módulo <code>server</code>. A alternativa mais conservadora é um <code>replace</code> da rota com a validação incluída.</p>
+</aside>
+
+<h3 id="replace">replace: quando o comportamento original não pode rodar</h3>
+<p>Use quando o original faz algo caro ou com efeito colateral (chamada a serviço externo, escrita em sistema de terceiros) que não deve acontecer. O guia oficial alerta: com <code>append</code>, a cadeia original <strong>sempre</strong> roda, e uma chamada externa pode acontecer duas vezes.</p>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/Product.js">
+'use strict';
+
+var server = require('server');
+var cache = require('*/cartridge/scripts/middleware/cache');
+server.extend(module.superModule);
+
+// replace NÃO reinsere o filtro de método: adicione server.middleware.get explicitamente
+server.replace('ShowQuickView', server.middleware.get, cache.applyPromotionSensitiveCache, function (req, res, next) {
+    var ProductFactory = require('*/cartridge/scripts/factories/product');
+    var params = req.querystring;
+    var product = ProductFactory.get(params);
+    res.render('product/quickView/acmeQuickView', { product: product });
+    next();
+});
+
+module.exports = server.exports();
+</script>
+
+<h3 id="nova-rota">Rotas novas num controller existente</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/Product.js (trecho)">
+// rota nova no mesmo controller: Product-Eco?pid=...
+server.get('Eco', server.middleware.include, function (req, res, next) {
+    var ProductMgr = require('dw/catalog/ProductMgr');
+    var p = ProductMgr.getProduct(req.querystring.pid);
+    res.render('product/components/ecoBadge', { isEco: !!(p && p.custom.isEcoFriendly) });
+    next();
+});
+</script>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>"Adicionar dados à PDP sem duplicar a lógica" → <code>server.extend(module.superModule)</code> + <strong>append</strong> + <code>getViewData</code>/<code>setViewData</code>.</li>
+  <li>"Evitar uma chamada de serviço duplicada" → <strong>replace</strong>.</li>
+  <li>"Mudar um passo do meio da cadeia" → não dá para mexer num passo isolado: substitua a rota.</li>
+  <li>"Exigir HTTPS ou login numa rota existente" → a documentação recomenda <strong>replace</strong> da rota com o middleware desejado.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="models" data-k="cap. 5">
+<h2>Estendendo models, decorators e helpers</h2>
+<div class="prose">
+<p>Models e helpers também usam <code>module.superModule</code>. O padrão: chamar o original e depois acrescentar. Exemplo real do <code>plugin_giftregistry</code>, que estende o model <code>fullProduct</code>:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="plugin_giftregistry/cartridge/models/product/fullProduct.js">
+'use strict';
+
+var giftRegistryLink = require('*/cartridge/models/product/decorators/giftRegistryLink');
+var base = module.superModule;
+
+function fullProduct(product, apiProduct, options) {
+    base.call(this, product, apiProduct, options); // todos os decorators do base
+    giftRegistryLink(product);                     // + o decorator do plugin
+    return product;
+}
+
+module.exports = fullProduct;
+</script>
+
+<h3 id="decorator-novo">Um decorator próprio</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/models/product/decorators/sustainability.js">
+'use strict';
+
+/**
+ * Acrescenta ao model as informações de sustentabilidade (atributos custom do Product).
+ * Object.defineProperty segue o estilo dos decorators do SFRA (enumerable para ir ao JSON).
+ */
+module.exports = function (object, apiProduct) {
+    Object.defineProperty(object, 'sustainability', {
+        enumerable: true,
+        value: {
+            isEco: apiProduct.custom.isEcoFriendly === true,
+            certification: apiProduct.custom.ecoCertification || null
+        }
+    });
+};
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/models/product/fullProduct.js">
+'use strict';
+
+var base = module.superModule;
+var sustainability = require('*/cartridge/models/product/decorators/sustainability');
+
+module.exports = function fullProduct(product, apiProduct, options) {
+    base.call(this, product, apiProduct, options);
+    sustainability(product, apiProduct);
+    return product;
+};
+</script>
+<p>Os tiles da PLP usam outro model (<code>productTile</code>), e o carrinho usa <code>productLineItem</code>. Estenda cada model onde a informação precisar aparecer.</p>
+
+<h3 id="helpers">Helpers e scripts</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/scripts/helpers/productHelpers.js">
+'use strict';
+
+var base = module.superModule;
+
+/**
+ * Mantém todas as funções do base e sobrescreve apenas uma.
+ * Quem chama require('*/cartridge/scripts/helpers/productHelpers') recebe esta versão.
+ */
+function getProductType(product) {
+    if (product.custom.isGiftCard === true) {
+        return 'giftcard';
+    }
+    return base.getProductType(product);
+}
+
+module.exports = Object.assign({}, base, { getProductType: getProductType });
+</script>
+<aside class="callout" data-kind="warn">
+<p>Para a sobrescrita valer, o base precisa ter feito <code>require('*/cartridge/scripts/helpers/productHelpers')</code> (com <code>*</code>, que segue o cartridge path), e não <code>require('~/cartridge/…')</code> (o próprio cartridge). O SFRA usa <code>*/cartridge/…</code> quase sempre, justamente para permitir overlays.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="templates" data-k="cap. 6">
+<h2>Sobrescrevendo templates</h2>
+<div class="prose">
+<p>Um template no seu cartridge com o <strong>mesmo caminho relativo</strong> substitui o do base. Não existe merge: o arquivo inteiro passa a ser o seu. Por isso, sobrescreva o menor template possível. Os templates do SFRA são divididos em componentes justamente para isso.</p>
+<script type="text/plain" class="src" data-lang="text" data-file="sobrescrita mínima">
+app_storefront_base/cartridge/templates/default/product/productDetails.isml   ← NÃO copie a página inteira
+app_storefront_base/cartridge/templates/default/product/components/
+    └── ... (componentes incluídos pela página)
+
+app_custom_acme/cartridge/templates/default/product/components/ecoBadge.isml  ← componente novo
+app_custom_acme/cartridge/templates/default/product/components/pidRating.isml ← sobrescreve só este componente
+</script>
+<script type="text/plain" class="src" data-lang="isml" data-file="app_custom_acme/cartridge/templates/default/product/components/pidRating.isml">
+<iscomment>
+    Cópia do pidRating.isml do base (número do produto + rating) com uma linha a mais:
+    o selo "eco". O productDetails.isml continua sendo o do base.
+</iscomment>
+<div class="product-number-rating clearfix">
+    <div class="product-number pull-left">
+        <isinclude template="product/components/productNumber" />
+    </div>
+    <div class="ratings pull-right">
+        <span class="sr-only">${Resource.msgf('label.product.ratings', 'common', null, product.rating)}</span>
+        <isinclude template="product/components/productRating" />
+    </div>
+    <isinclude template="product/components/ecoBadge" />
+</div>
+</script>
+<script type="text/plain" class="src" data-lang="isml" data-file="app_custom_acme/cartridge/templates/default/product/components/ecoBadge.isml">
+<isif condition="${pdict.product && pdict.product.sustainability && pdict.product.sustainability.isEco}">
+    <span class="badge badge-success eco-badge">${Resource.msg('label.eco', 'product', null)}</span>
+</isif>
+</script>
+<aside class="callout" data-kind="verify">
+<p>Os nomes dos componentes de <code>product/components/</code> variam entre versões do SFRA. Antes de sobrescrever, abra o template da página na sua versão do base, veja quais componentes ele inclui e escolha o menor que resolve.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p>O guia oficial lista estes anti-padrões: <strong>sobrescrever variáveis do <code>pdict</code></strong>, <strong>apagar propriedades do <code>pdict</code></strong> e <strong>trocar algo do <code>pdict</code> por um valor de assinatura diferente</strong>. Outros templates e plugins esperam a estrutura original.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="forms-resources" data-k="cap. 7">
+<h2>Forms, textos e recursos estáticos</h2>
+<div class="prose">
+<h3 id="forms">Form definitions</h3>
+<p>Um form XML no seu cartridge com o mesmo caminho (<code>forms/default/address.xml</code>) substitui o do base inteiro. Copie o original e acrescente os campos:</p>
+<script type="text/plain" class="src" data-lang="xml" data-file="app_custom_acme/cartridge/forms/default/address.xml (trecho)">
+<?xml version="1.0"?>
+<form xmlns="http://www.demandware.com/xml/form/2008-04-19">
+    <!-- ... campos originais do base copiados ... -->
+
+    <!-- campo novo: número do endereço, obrigatório no Brasil -->
+    <field formid="addressNumber" label="label.input.address.number" type="string" mandatory="true"
+           max-length="10" missing-error="error.message.required" />
+</form>
+</script>
+<p>O tratamento completo de forms (validação, CSRF, gravação) está no <a class="text-link" href="12-forms.html">tema 12</a>.</p>
+
+<h3 id="resources">Resource bundles (.properties)</h3>
+<p>Os textos ficam em <code>templates/resources/*.properties</code> (e nas variações por locale, como <code>product_pt_BR.properties</code>). Para trocar ou acrescentar textos, crie no seu cartridge o arquivo de mesmo nome:</p>
+<script type="text/plain" class="src" data-lang="properties" data-file="app_custom_acme/cartridge/templates/resources/product_pt_BR.properties">
+# chaves novas usadas pelo componente ecoBadge
+label.eco=Produto sustentável
+error.store.only=Este produto está disponível apenas nas lojas físicas.
+</script>
+<aside class="callout" data-kind="verify">
+<p>Em projetos SFRA é comum manter no cartridge custom só as chaves novas ou alteradas, contando que a busca de chave percorra o cartridge path. Confirme esse comportamento na sua instância (por exemplo, uma chave do base que você não copiou continua aparecendo?) antes de adotar a convenção.</p>
+</aside>
+
+<h3 id="static">Estáticos</h3>
+<p>Imagens, fontes e outros arquivos em <code>static/default/…</code> seguem a mesma regra do cartridge path: o primeiro arquivo encontrado com aquele caminho vence. CSS e JS de cliente seguem as regras de build do <a class="text-link" href="04-anatomia-sfra.html#cliente">tema 04</a>.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="plugins" data-k="cap. 8">
+<h2>Plugins: o padrão de extensão em ação</h2>
+<div class="prose">
+<p>Os plugins oficiais são o melhor material de estudo de extensão, porque fazem exatamente o que você faria. Trecho real do <code>plugin_productcompare</code>, que acrescenta uma flag às rotas de busca:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="plugin_productcompare/cartridge/controllers/Search.js (trecho)">
+'use strict';
+
+var server = require('server');
+server.extend(module.superModule);
+
+server.append('ShowAjax', function (req, res, next) {
+    var viewData = res.getViewData();
+    viewData.compareEnabled = getCategoryCompareStatus(viewData.productSearch);
+    res.setViewData(viewData);
+    next();
+});
+</script>
+<h3 id="instalar-plugin">Instalando um plugin</h3>
+<ol class="steps">
+  <li>Clone o repositório do plugin na <strong>mesma tag</strong> do SFRA.</li>
+  <li>Rode <code>npm install</code> e o build (se o plugin tiver JS ou SCSS).</li>
+  <li>Envie o cartridge do plugin (e as dependências dele, como <code>lib_productlist</code>).</li>
+  <li>Importe os metadados ou dados do plugin, se houver (custom objects, preferências, atributos): o README de cada plugin indica.</li>
+  <li>Ponha o plugin no cartridge path à esquerda do base e à direita do seu custom.</li>
+  <li>Se o seu custom estende telas que o plugin também estende, declare o plugin em <code>paths</code> e importe dele (não do base) no JS e no SCSS.</li>
+</ol>
+<aside class="callout" data-kind="exam">
+<p>Com dois cartridges estendendo o mesmo controller (custom e plugin), a cadeia de <code>module.superModule</code> se encadeia: o custom estende o plugin, que estende o base. Por isso a ordem no cartridge path define a ordem dos <code>append</code>.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Copiar o controller do base inteiro para o custom.</strong> Você congela uma versão antiga e perde as correções. Use <code>extend</code> com <code>append</code>/<code>prepend</code> e só faça <code>replace</code> da rota que precisa.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong><code>append</code> numa rota que chama serviço externo para "corrigir" o resultado.</strong> O serviço é chamado de novo (ou o resultado dele é descartado). Use <code>replace</code>.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Esquecer <code>server.middleware.get</code> ou <code>post</code> no <code>replace</code>.</strong> O <code>replace</code> usa <code>server.use</code>, que não filtra método: a rota passa a aceitar qualquer verbo.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong><code>server.append</code> sem <code>server.extend</code> antes.</strong> Sem herdar as rotas, a rota "não existe" e o server lança <em>Route with this name does not exist</em>.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Reescrever uma feature que a plataforma oferece</strong> (promoções, preços, slots, busca). Mais código, menos autonomia para o negócio, upgrades mais caros.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li><code>module.superModule</code> → o módulo de <strong>mesmo caminho</strong> no próximo cartridge <strong>à direita</strong>.</li>
+  <li><code>server.extend(module.superModule)</code> é obrigatório antes de append, prepend ou replace.</li>
+  <li><code>append</code> roda <strong>depois</strong> da cadeia original; <code>prepend</code>, <strong>antes</strong>.</li>
+  <li>Sobrescrever um template = arquivo de mesmo caminho em cartridge à esquerda; não há merge.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td><code>Route with this name does not exist</code></td><td>Faltou <code>server.extend(module.superModule)</code>; nome da rota errado</td><td>Estenda antes; confira o nome exato no base.</td></tr>
+<tr><td><code>Route with this name already exists</code></td><td>Usou <code>server.get</code> para uma rota herdada</td><td>Use <code>replace</code> (ou outro nome de rota).</td></tr>
+<tr><td><code>Cannot extend server without routes</code> / <code>non-valid server object</code></td><td><code>module.superModule</code> é <code>null</code>: não há controller com esse nome à direita</td><td>Confira o nome do arquivo e o cartridge path.</td></tr>
+<tr><td>append não muda nada na página</td><td>A propriedade foi gravada no viewData, mas o template não a lê; o cartridge não está no path</td><td>Logue o viewData; confira o template e o path.</td></tr>
+<tr><td>Rota substituída responde a POST indevido</td><td><code>replace</code> sem filtro de método</td><td>Adicione <code>server.middleware.get</code> ou <code>post</code>.</td></tr>
+<tr><td>Serviço externo chamado duas vezes</td><td><code>append</code> sobre rota que já chama o serviço</td><td>Troque por <code>replace</code>.</td></tr>
+<tr><td>Override de helper ignorado</td><td>O chamador usa <code>~/</code> ou o caminho do cartridge base</td><td>Estenda o chamador também, ou use o ponto de extensão (hook) existente.</td></tr>
+<tr><td>Template sobrescrito quebrou depois do upgrade</td><td>Cópia antiga de um template grande</td><td>Diferencie com o base novo; reduza a sobrescrita a componentes.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Aplicar a escada de decisão: configuração → plugin/LINK → extensão → replace → código novo.</li>
+  <li>Criar um cartridge de customização com <code>paths</code> e posicioná-lo no cartridge path.</li>
+  <li>Usar <code>server.extend</code>, <code>append</code>, <code>prepend</code> e <code>replace</code>, sabendo o efeito de cada um na cadeia.</li>
+  <li>Saber quando <code>append</code> é perigoso (serviços externos) e quando <code>replace</code> é necessário.</li>
+  <li>Estender models, decorators e helpers com <code>module.superModule</code>.</li>
+  <li>Sobrescrever o menor template possível, sem alterar a estrutura do <code>pdict</code>.</li>
+  <li>Estender forms (arquivo inteiro), textos e estáticos.</li>
+  <li>Instalar e ordenar plugins.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Você precisa exibir na PDP um atributo custom do produto. Qual é a abordagem recomendada?</p>
+  <ol class="opts-l"><li>Copiar <code>Product.js</code> do base e editar</li><li><code>server.extend(module.superModule)</code> + <code>server.append('Show', …)</code> acrescentando ao viewData, e um componente de template</li><li>Editar <code>app_storefront_base</code></li><li>Criar um pipeline</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Estender preserva o comportamento do base e recebe as correções de upgrade.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">A rota <code>Cart-AddProduct</code> chama um serviço de reserva de estoque. Você precisa trocar o serviço. O que usar?</p>
+  <ol class="opts-l"><li><code>append</code>, chamando o serviço novo</li><li><code>replace</code></li><li><code>prepend</code>, chamando o serviço novo</li><li>Editar o base</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Com append ou prepend, a cadeia original (com o serviço antigo) continuaria rodando. O guia orienta: com serviço externo, substitua a rota.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">O que <code>module.superModule</code> referencia dentro de <code>app_custom/cartridge/models/cart.js</code>, com path <code>app_custom:plugin_x:app_storefront_base</code>?</p>
+  <ol class="opts-l"><li>O <code>models/cart.js</code> do próprio app_custom</li><li>O <code>models/cart.js</code> do próximo cartridge à direita que tenha esse arquivo (plugin_x, se existir; senão o base)</li><li>Sempre o do base</li><li>O controller <code>Cart.js</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> É o módulo de mesmo caminho no próximo cartridge à direita no path.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Depois de <code>server.replace('Show', function (req, res, next) {…})</code>, a rota passou a aceitar POST. Por quê?</p>
+  <ol class="opts-l"><li>Bug da plataforma</li><li><code>replace</code> registra via <code>server.use</code>, sem o filtro de método; é preciso passar <code>server.middleware.get</code></li><li>Faltou <code>server.exports()</code></li><li>O cache estava ligado</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> No <code>server.js</code>, só <code>get()</code> e <code>post()</code> inserem o filtro; <code>replace()</code> chama <code>use()</code>.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual destes é anti-padrão segundo o guia do SFRA?</p>
+  <ol class="opts-l"><li>Acrescentar uma propriedade nova ao viewData</li><li>Trocar <code>pdict.product</code> por um objeto de estrutura diferente</li><li>Criar um decorator novo</li><li>Usar <code>assets.addCss</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Não sobrescreva, não apague e não mude a assinatura de variáveis do pdict.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">O negócio quer "frete grátis acima de R$ 300 para clientes cadastrados". Qual é a melhor solução?</p>
+  <ol class="opts-l"><li>Hook de frete customizado</li><li>Promoção de shipping com qualifier de customer group <em>Registered</em></li><li><code>append</code> no checkout</li><li>Atributo custom no basket</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> É configuração pura; código só se a regra fosse impossível de modelar como promoção.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-customizing-sfra.html">Customize SFRA</a>: cartridges custom, templates, models, extend × override, replace, acesso a rotas.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-sfra-features-and-comps.html">SFRA Features and Components</a>: server, middleware, eventos, garantia de compatibilidade.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-sfra-modules.html">SFRA Modules</a></li>
+  <li>Código: <code>modules/server/server.js</code> (extend, append, prepend, replace), <code>route.js</code>, <code>middleware.js</code>; <code>plugin_giftregistry/models/product/fullProduct.js</code>; <code>plugin_productcompare/controllers/Search.js</code>.</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

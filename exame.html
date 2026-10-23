@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>Exame, flashcards e simulado · Guia SFCC</title>
+<meta name="description" content="Salesforce Certified B2C Commerce Developer: ficha do exame, pesos por domínio, flashcards por tema e simulado com gabarito comentado.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="assets/css/ink.css">
+<script src="assets/js/boot.js"></script>
+</head>
+<body data-page="exame" data-root=".">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label">salesforce certified b2c commerce developer</p>
+  <h1>Exame, flashcards e simulado</h1>
+  <p class="lead">Use esta página depois dos temas. Os <strong>flashcards</strong> servem para revisão rápida, e o <strong>simulado</strong> traz gabarito comentado e um link para o tema que aprofunda cada questão. Os dois podem ser filtrados por tema; o simulado também por domínio do exame.</p>
+  <p class="theme-meta"><span class="text-label">ir para</span><a class="text-link" href="#pesos">ficha e pesos</a><a class="text-link" href="#flashcards">flashcards</a><a class="text-link" href="#simulado">simulado</a></p>
+</header>
+
+<section class="module" id="pesos">
+  <header class="module-h"><p class="text-label">o exame</p><h2>Ficha e pesos por domínio</h2></header>
+  <div data-exam-facts></div>
+  <aside class="callout" data-kind="verify">
+    <p>A Salesforce não publica uma página estática com estes números, e eles mudam entre versões do exame. Ficha e pesos vêm de fontes de terceiros alinhadas ao guia <em>Spring '23</em>. <strong>Confirme no exam guide atual</strong> em <a class="text-link" href="https://trailhead.salesforce.com/credentials/b2ccommercedeveloper">Trailhead › B2C Commerce Developer</a> antes de agendar a prova. Os objetivos e competências citados em cada tema são os do texto oficial "About the exam".</p>
+  </aside>
+  <div class="domains" data-exam-domains></div>
+</section>
+
+<section class="module" id="flashcards">
+  <header class="module-h"><p class="text-label">revisão</p><h2>Flashcards</h2></header>
+  <div class="quiz-bar">
+    <p class="filters"><label class="text-label" for="card-theme">tema</label><select id="card-theme" data-card-filter></select><span class="text-meta" data-card-count aria-live="polite"></span></p>
+    <p class="tools" role="group" aria-label="ações dos flashcards">
+      <button type="button" class="quiet-action text-meta" data-cards-act="open">revelar todos</button>
+      <button type="button" class="quiet-action text-meta" data-cards-act="close">esconder todos</button>
+      <button type="button" class="quiet-action text-meta" data-cards-act="shuffle">embaralhar</button>
+    </p>
+  </div>
+  <div class="cards" data-cards></div>
+</section>
+
+<section class="module" id="simulado">
+  <header class="module-h"><p class="text-label">prática</p><h2>Simulado</h2></header>
+  <div class="quiz-bar">
+    <p class="filters">
+      <label class="text-label" for="quiz-theme">tema</label><select id="quiz-theme" data-quiz-theme></select>
+      <label class="text-label" for="quiz-dom">domínio</label><select id="quiz-dom" data-quiz-dom></select>
+    </p>
+    <p class="text-meta score" aria-live="polite"><span data-score></span> · <button type="button" class="quiet-action text-meta" data-quiz-shuffle>embaralhar</button> · <button type="button" class="quiet-action text-meta" data-quiz-reset>reiniciar</button></p>
+  </div>
+  <div class="quiz" data-quiz></div>
+  <aside class="callout" data-kind="tip">
+    <p>Cada tema também termina com <strong>questões de fixação</strong> próprias, e elas não se repetem aqui. Para treinar no ritmo da prova, filtre por domínio, embaralhe e responda sem consultar o material.</p>
+  </aside>
+</section>
+
+</main>
+</div></div>
+<script src="assets/js/manifest.js"></script>
+<script src="assets/js/core.js"></script>
+<script src="assets/js/exam-data.js"></script>
+<script src="assets/js/exam.js"></script>
+<script src="assets/js/search.js"></script>
+</body>
+</html>

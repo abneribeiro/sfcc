@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>14 · Business Manager para desenvolvedores · Guia SFCC</title>
+<meta name="description" content="Business Manager do ponto de vista do desenvolvedor: code versions e compatibility mode, criação e configuração de sites, cartridge path, cache, locales e moedas, preferências globais, de site e custom (com valores por instância), feature switches, Site Import & Export, módulos de Import & Export, URLs e aliases, roles e permissões.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="14" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Business Manager para desenvolvedores</h1>
+  <p class="lead">O Business Manager (BM) é onde código e configuração se encontram. Um desenvolvedor usa o BM para ativar code versions, criar e configurar sites, definir o cartridge path, criar preferências custom, mover dados entre instâncias (Site Import &amp; Export e os módulos de Import &amp; Export), configurar URLs e locales, e conceder permissões. Este tema é o mapa dessas telas, com os caminhos exatos, o que cada configuração faz e como automatizá-la por XML ou pelo CLI.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>Merchant Tools</dt><dd>Menu por <strong>site</strong>: catálogo, preços, conteúdo, promoções, busca, pedidos, clientes, site preferences.</dd>
+  <dt>Administration</dt><dd>Menu da <strong>organização/instância</strong>: sites, code deployment, replicação, jobs, global preferences, system e custom object types, usuários e roles, operações.</dd>
+  <dt>Global preferences</dt><dd>Configurações da organização (locales ativos, fuso da instância, segurança, sequence numbers, feature switches, retenção). Custom: atributos de <code>OrganizationPreferences</code>.</dd>
+  <dt>Site preferences</dt><dd>Configurações de um site (locales e moedas permitidos, storefront URLs, baskets, pedidos, busca, source codes…). Custom: atributos de <code>SitePreferences</code>.</dd>
+  <dt>Site Import &amp; Export</dt><dd>Exporta ou importa um .zip com dados globais e de sites (exceto código): ideal para clonar e versionar configuração.</dd>
+  <dt>Import &amp; Export (módulos)</dt><dd>Telas por área (catálogo, conteúdo, clientes, promoções…) para importar e exportar XML de um tipo de dado.</dd>
+  <dt>Account Manager</dt><dd>O serviço de identidade da Salesforce Commerce Cloud: usuários, API clients e roles de acesso às instâncias (login unificado no BM).</dd>
+</dl>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="mapa" data-k="cap. 2">
+<h2>Mapa das telas que o dev usa</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Preciso…</th><th>Caminho no BM</th></tr></thead>
+<tbody>
+<tr><td>Ativar ou reverter código</td><td>Administration &gt; Site Development &gt; Code Deployment</td></tr>
+<tr><td>Cartridge path, cache, status do site</td><td>Administration &gt; Sites &gt; Manage Sites &gt; (site) &gt; Settings / Cache / General</td></tr>
+<tr><td>Criar atributo custom ou preferência custom</td><td>Administration &gt; Site Development &gt; System Object Types</td></tr>
+<tr><td>Criar custom object type</td><td>Administration &gt; Site Development &gt; Custom Object Types</td></tr>
+<tr><td>Clonar ou exportar dados</td><td>Administration &gt; Site Development &gt; Site Import &amp; Export</td></tr>
+<tr><td>Importar metadados, custom objects</td><td>Administration &gt; Site Development &gt; Import &amp; Export</td></tr>
+<tr><td>Ver logs e WebDAV</td><td>Administration &gt; Site Development &gt; Development Setup (e Log Center)</td></tr>
+<tr><td>Jobs</td><td>Administration &gt; Operations &gt; Jobs</td></tr>
+<tr><td>Serviços (integrações)</td><td>Administration &gt; Operations &gt; Services</td></tr>
+<tr><td>Quotas</td><td>Administration &gt; Operations &gt; Quota Status</td></tr>
+<tr><td>OCAPI settings</td><td>Administration &gt; Site Development &gt; Open Commerce API Settings</td></tr>
+<tr><td>Replicação</td><td>Administration &gt; Replication &gt; Data / Code Replication</td></tr>
+<tr><td>Locales e moedas do site</td><td>Merchant Tools &gt; Site Preferences &gt; Locales / Currencies</td></tr>
+<tr><td>Custom site preferences</td><td>Merchant Tools &gt; Site Preferences &gt; Custom Preferences</td></tr>
+<tr><td>Storefront URLs, aliases, URL rules</td><td>Merchant Tools &gt; Site Preferences &gt; Storefront URLs; Merchant Tools &gt; SEO &amp; Discoverability &gt; Aliases / URL Rules</td></tr>
+<tr><td>Índices de busca</td><td>Merchant Tools &gt; Search &gt; Search Indexes</td></tr>
+<tr><td>Usuários e roles</td><td>Administration &gt; Organization &gt; Users / Roles &amp; Permissions</td></tr>
+</tbody>
+</table>
+<p>Os rótulos podem mudar entre releases (o BM tem um <em>App Launcher</em> e telas redesenhadas, como a nova tela de campanhas da 26.7), mas a divisão Merchant Tools × Administration se mantém.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="code-versions" data-k="cap. 3">
+<h2>Code versions e compatibility mode</h2>
+<div class="prose">
+<p>Uma code version é uma pasta de cartridges; a instância usa a <strong>ativa</strong>. Em <em>Code Deployment</em> você cria versões vazias (<strong>Add</strong>), ativa (<strong>Activate</strong>), volta para a anterior (<strong>Rollback</strong>), renomeia, baixa e apaga versões inativas.</p>
+<ul>
+  <li>Ativar uma versão troca imediatamente o código usado e <strong>limpa os caches</strong> dependentes.</li>
+  <li><strong>Rollback</strong> ativa a versão anterior e o compatibility mode dela, se a pasta ainda existir.</li>
+  <li>A plataforma apaga sozinha as versões mais antigas, preservando a ativa e a anterior. A retenção é configurável de 3 a 20 (padrão 10).</li>
+  <li><strong>Production rejeita upload WebDAV na versão ativa</strong>: lá, só se envia para versões inativas. A boa prática é subir sempre para uma versão nova em Staging e replicar.</li>
+  <li>Segurança obrigatória desde 2020: <strong>certificado de cliente</strong> (2FA) para enviar código a Staging e <strong>uploads bloqueados</strong> em Production (<em>Global Preferences &gt; Security &gt; Access Restriction</em>). Código chega a Production por code replication.</li>
+</ul>
+<h3 id="compat-mode">Compatibility mode</h3>
+<p>Cada code version tem um compatibility mode (API version), ativado junto com ela. Dá para escolher modos <strong>mais novos</strong> que o ativo ou voltar para o <strong>anterior</strong>, nunca um mais antigo que o anterior. Todos os cartridges de uma aplicação usam o mesmo modo. A recomendação é mudar em todas as instâncias, evitar modos diferentes entre Staging e Production e não mudar direto em Production.</p>
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal (b2c CLI)">
+b2c code list                                  # versões, ativa e modificação
+b2c code deploy --code-version rel_2026_11 --reload
+b2c code activate rel_2026_11
+b2c code delete rel_2026_08
+</script>
+<aside class="callout" data-kind="best">
+<p>Toda mudança em produção vai numa <strong>code version nova</strong>, mesmo um hotfix. A documentação insiste: subir correção direto na versão ativa impede rollback rápido.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="sites" data-k="cap. 4">
+<h2>Sites: criação e configuração</h2>
+<div class="prose">
+<h3 id="criar-site">Criar um site</h3>
+<ol class="steps">
+  <li><em>Administration &gt; Sites &gt; Manage Sites &gt; New</em>.</li>
+  <li><strong>ID</strong>: até 32 caracteres alfanuméricos, hífen e underscore (sem espaços). Não use o mesmo ID de uma library compartilhada.</li>
+  <li><strong>Currency</strong>: a moeda padrão (o site pode ter outras).</li>
+  <li><strong>Taxation</strong>: <strong>Net</strong> (EUA, imposto somado) ou <strong>Gross</strong> (Europa e Ásia, preço com imposto).</li>
+  <li><em>Apply</em>: o site nasce vazio, com as abas General, Settings, Cache e Security.</li>
+</ol>
+<h3 id="atribuir-dados">Ligar os dados ao site</h3>
+<ul>
+  <li><strong>Catálogo</strong>: o storefront catalog do site (<em>Products and Catalogs &gt; Catalogs</em>, no catálogo, <em>Site Assignments</em>).</li>
+  <li><strong>Price books</strong>: <em>Price Books &gt; (book) &gt; Site Assignments</em> (só na moeda do site).</li>
+  <li><strong>Inventory list</strong>: <em>Inventory &gt; (lista) &gt; Site Assignments</em> (uma por site).</li>
+  <li><strong>Library</strong>: a do site, ou uma compartilhada.</li>
+  <li><strong>Locales</strong> (capítulo 5) e <strong>índices de busca</strong> reconstruídos.</li>
+</ul>
+<h3 id="settings-cache">Settings, cache e status</h3>
+<table>
+<thead><tr><th>Aba</th><th>O que o dev configura</th></tr></thead>
+<tbody>
+<tr><td>Settings</td><td><strong>Cartridges</strong> (o cartridge path), fuso do site</td></tr>
+<tr><td>Cache</td><td>Page cache ligado ou desligado, TTL do conteúdo estático, partições, TTL da fingerprint do Page Designer, invalidação manual</td></tr>
+<tr><td>General</td><td>Status (<strong>Online</strong>, <strong>Maintenance</strong> para página de manutenção, offline), tipo de instância para preferências</td></tr>
+</tbody>
+</table>
+<p>Para desenvolver numa sandbox: page cache desligado e TTL de estático 0. Nunca faça isso em Development ou Production.</p>
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal (b2c CLI)">
+b2c sites list
+b2c sites cartridges list --site-id RefArch
+b2c sites cartridges add app_custom_acme --site-id RefArch --position first
+b2c sites cartridges list --bm                  # cartridge path do Business Manager
+</script>
+<aside class="callout" data-kind="note">
+<p>Para acessar o BM por um hostname próprio (ex.: <code>staging.acme.com</code>), adicione-o à <strong>hostname allowlist</strong> em <em>Manage Sites &gt; Business Manager &gt; Hostnames</em> (até 10). Sem isso, alguns módulos mostram erro.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="locales" data-k="cap. 5">
+<h2>Locales, moedas e fusos</h2>
+<div class="prose">
+<ol class="steps">
+  <li><strong>Organização primeiro</strong>: <em>Administration &gt; Global Preferences &gt; Locales</em> ativa os locales da instância (pt_BR, es_AR…), com formatos regionais e a cadeia de <em>fallback</em> (pt_BR → pt → default).</li>
+  <li><strong>Site depois</strong>: <em>Merchant Tools &gt; Site Preferences &gt; Locales</em> escolhe quais locales ativos o site aceita e qual é o padrão.</li>
+  <li><strong>Moedas</strong>: <em>Site Preferences &gt; Currencies</em>; cada moeda precisa de price books próprios.</li>
+  <li><strong>Fusos</strong>: o da instância (<em>Global Preferences &gt; Instance Time Zone</em>, usado em jobs e relatórios) e o do site (usado nas datas do storefront e em <code>&lt;isprint timezone="SITE"&gt;</code>).</li>
+</ol>
+<aside class="callout" data-kind="exam">
+<p>O fallback de locale configurado no BM vale para <strong>atributos localizáveis de objetos persistentes</strong> (nome do produto, conteúdo). Ele <strong>não</strong> vale para templates, forms, resource bundles ou estáticos de cartridges, que usam a pasta do locale ou <code>default</code>.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="preferencias" data-k="cap. 6">
+<h2>Preferências globais, de site e custom</h2>
+<div class="prose">
+<table>
+<thead><tr><th></th><th>Global (organização)</th><th>Site</th></tr></thead>
+<tbody>
+<tr><td>Standard</td><td>Locales, fuso da instância, segurança (login, HTTPS, access restriction), sequence numbers, retenção, feature switches, OAuth providers</td><td>Locales e moedas do site, Storefront URLs, baskets (persistência, duração), pedidos, clientes, busca, source codes, fuso do site</td></tr>
+<tr><td>Custom</td><td>Atributos de <code>OrganizationPreferences</code> (<em>Global Preferences &gt; Custom Preferences</em>)</td><td>Atributos de <code>SitePreferences</code> (<em>Site Preferences &gt; Custom Preferences</em>)</td></tr>
+<tr><td>Leitura no código</td><td><code>System.getPreferences().getCustom().x</code></td><td><code>Site.getCurrent().getCustomPreferenceValue('x')</code></td></tr>
+</tbody>
+</table>
+<h3 id="criar-pref">Criando uma preferência custom</h3>
+<ol class="steps">
+  <li><em>Administration &gt; Site Development &gt; System Object Types &gt; SitePreferences &gt; Attribute Definitions &gt; New</em>.</li>
+  <li>Em <em>Attribute Grouping</em>, crie um grupo (ele vira uma seção em <em>Custom Preferences</em>) e inclua o atributo.</li>
+  <li>Defina o valor em <em>Merchant Tools &gt; Site Preferences &gt; Custom Preferences &gt; (grupo)</em>.</li>
+</ol>
+<p>Os mesmos passos valem para <code>OrganizationPreferences</code>. Preferências custom marcadas como obrigatórias não podem ser gravadas vazias, nem pelo BM nem por import.</p>
+
+<h3 id="pref-instancias">Valores diferentes por tipo de instância</h3>
+<p>O <code>preferences.xml</code> de um site (formato do <code>preferences.xsd</code> oficial) aceita, dentro de <code>&lt;custom-preferences&gt;</code>, os blocos <code>all-instances</code>, <code>development</code>, <code>staging</code> e <code>production</code>. Um único arquivo versionado configura todos os ambientes:</p>
+<script type="text/plain" class="src" data-lang="xml" data-file="metadata/sites/RefArch/preferences.xml">
+<?xml version="1.0" encoding="UTF-8"?>
+<preferences xmlns="http://www.demandware.com/xml/impex/preferences/2007-03-31">
+    <custom-preferences>
+        <all-instances>
+            <preference preference-id="acmeReviewsEnabled">true</preference>
+            <preference preference-id="acmeReviewsMaxItems">5</preference>
+        </all-instances>
+        <development>
+            <preference preference-id="acmeAnalyticsTag">GTM-DEV123</preference>
+        </development>
+        <staging>
+            <preference preference-id="acmeAnalyticsTag">GTM-STG456</preference>
+        </staging>
+        <production>
+            <preference preference-id="acmeAnalyticsTag">GTM-PRD789</preference>
+        </production>
+    </custom-preferences>
+</preferences>
+</script>
+<aside class="callout" data-kind="verify">
+<p>O XSD confirma os quatro blocos. Como a plataforma resolve o valor quando há <code>all-instances</code> e um bloco específico ao mesmo tempo (e como sandboxes se encaixam, já que reportam tipo "development") não está detalhado nos guias consultados. Teste o comportamento antes de depender dele.</p>
+</aside>
+
+<h3 id="feature-switches">Feature switches</h3>
+<p>Funcionalidades novas que podem quebrar comportamento existente chegam <strong>desligadas</strong> em <em>Administration &gt; Global Preferences &gt; Feature Switches</em>. A documentação recomenda ligar primeiro em sandboxes, testar, e só então ligar no PIG. Um exemplo que aparece em integrações é o switch que habilita a execução de hooks de OCAPI/SCAPI.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="import-export" data-k="cap. 7">
+<h2>Site Import &amp; Export e os módulos de Import &amp; Export</h2>
+<div class="prose">
+<h3 id="site-impex">Site Import &amp; Export</h3>
+<p><em>Administration &gt; Site Development &gt; Site Import &amp; Export</em>. Gera ou lê um .zip no formato <code>site.xsd</code>, com dados <strong>globais</strong> (preferências, custom object types, extensões de system objects, custom preferences, schedules, catálogos, price books) e <strong>de sites</strong> (custom objects, libraries, customer groups, shipping, tax, payment, inventory, stores, preferências, busca, source codes, atribuições). <strong>Código não entra.</strong></p>
+<table>
+<thead><tr><th>Uso</th><th>Como</th></tr></thead>
+<tbody>
+<tr><td>Montar uma sandbox igual à de outro dev</td><td>Exporte da origem e importe na sandbox (mesmos IDs de site)</td></tr>
+<tr><td>Trazer dados de Production para depurar</td><td>Exporte só as unidades necessárias. <strong>Desmarque Users e Access Roles</strong> (ou sobrescreve usuários e permissões do destino); evite dados de clientes por privacidade</td></tr>
+<tr><td>Versionar configuração</td><td>Exports são ordenados (catálogo por SKU, inventário por produto…), então diffs entre exports mostram mudanças reais</td></tr>
+</tbody>
+</table>
+<ul>
+  <li><strong>Local</strong> (upload do seu computador) ou <strong>Remote</strong> (até 50 GB).</li>
+  <li><em>Save in Global Export Directory</em>: num PIG, o arquivo fica visível para as outras instâncias do PIG; numa sandbox, para as outras sandboxes da SIG.</li>
+  <li>Um export que falha gera um zip com sufixo <code>-invalid</code>.</li>
+  <li>Compatibilidade de formato só é garantida entre instâncias da mesma versão da plataforma.</li>
+  <li>Jobs custom importados numa sandbox não rodam por agendamento (scheduled jobs ficam desativados em sandboxes); rode-os manualmente.</li>
+</ul>
+
+<h3 id="modulos-impex">Módulos de Import &amp; Export por área</h3>
+<table>
+<thead><tr><th>Dado</th><th>Onde no BM</th><th>Schema</th><th>Job step</th></tr></thead>
+<tbody>
+<tr><td>Catálogo</td><td>Merchant Tools &gt; Products and Catalogs &gt; Import &amp; Export</td><td><code>catalog.xsd</code></td><td>ImportCatalog / ExportCatalog</td></tr>
+<tr><td>Price books, inventário</td><td>Mesmo local</td><td><code>pricebook.xsd</code>, <code>inventory.xsd</code></td><td>ImportPriceBook, ImportInventoryLists…</td></tr>
+<tr><td>Conteúdo</td><td>Merchant Tools &gt; Content &gt; Import &amp; Export</td><td><code>library.xsd</code></td><td>ImportContent / ExportContent</td></tr>
+<tr><td>Promoções, cupons, slots, source codes, stores</td><td>Merchant Tools &gt; Online Marketing &gt; Import &amp; Export</td><td><code>promotion.xsd</code>, <code>coupon.xsd</code>, <code>slot.xsd</code>…</td><td>ImportPromotions, ImportCoupons…</td></tr>
+<tr><td>Clientes, grupos, listas</td><td>Merchant Tools &gt; Customers &gt; Import &amp; Export</td><td><code>customer.xsd</code>…</td><td>ImportCustomers…</td></tr>
+<tr><td>Pedidos (só export)</td><td>Merchant Tools &gt; Ordering &gt; Import &amp; Export</td><td><code>order.xsd</code></td><td>ExportOrders</td></tr>
+<tr><td>Custom objects</td><td>Merchant Tools &gt; Custom Objects &gt; Import &amp; Export</td><td><code>customobject.xsd</code></td><td>ImportCustomObjects / ExportCustomObjects</td></tr>
+<tr><td>Metadados (atributos, CO types, preferências)</td><td>Administration &gt; Site Development &gt; Import &amp; Export</td><td><code>metadata.xsd</code></td><td>ExportMetaData</td></tr>
+<tr><td>Serviços</td><td>Administration &gt; Operations &gt; Import &amp; Export</td><td>services</td><td>ImportServices / ExportServices</td></tr>
+</tbody>
+</table>
+<p>Os modos de import (MERGE, UPDATE, REPLACE, DELETE) e a automação por jobs estão no <a class="text-link" href="18-jobs.html">tema 18</a>. Boas práticas oficiais: feeds <strong>delta</strong> (só as diferenças) sempre que possível, e arquivar ao menos o último feed, porque imports não têm rollback.</p>
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal (b2c CLI)">
+b2c job import ./metadata --show-log                         # diretório ou zip no formato de site import
+b2c job export --site RefArch --site-data preferences,custom_objects --output ./export
+b2c job export --all --output ./full-backup                  # export completo da instância
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="urls" data-k="cap. 8">
+<h2>URLs, aliases e redirects</h2>
+<div class="prose">
+<ul>
+  <li><strong>Storefront URLs</strong> (<em>Site Preferences &gt; Storefront URLs</em>): liga as SEO URLs (<code>/pt-br/tenis-corrida.html</code> em vez de <code>/on/demandware.store/Sites-…/Product-Show</code>). Desligue no começo do desenvolvimento para testar rotas direto.</li>
+  <li><strong>URL rules</strong>: como as URLs de catálogo, conteúdo e pipelines são geradas (prefixos, locale no caminho, caracteres).</li>
+  <li><strong>Aliases</strong> (<em>SEO &amp; Discoverability &gt; Aliases</em>): o arquivo JSON que mapeia <strong>hostnames</strong> para sites e locales. É <strong>específico de cada instância e não é replicado</strong>; configure-o em cada uma.</li>
+  <li><strong>URL redirects e mappings</strong>: redirecionamentos de URLs antigas (301) e mapeamentos estáticos e dinâmicos.</li>
+  <li><strong>Enforce HTTPS</strong>: global (<em>Global Preferences</em>) ou por site.</li>
+</ul>
+<aside class="callout" data-kind="best">
+<p>Gere URLs sempre com <code>URLUtils</code> (<code>url</code>, <code>https</code>, <code>abs</code>, <code>staticURL</code>). Assim, ligar SEO URLs, mudar URL rules ou trocar de domínio não exige mudança de código nem de conteúdo.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="usuarios" data-k="cap. 9">
+<h2>Usuários, roles e permissões</h2>
+<div class="prose">
+<ul>
+  <li><strong>Login unificado</strong>: desde a 19.5, instâncias novas usam o login do Account Manager. Para ferramentas externas (WebDAV, OCAPI, storefront protegido), cada usuário gera <strong>access keys</strong> com escopo, que valem um ano.</li>
+  <li><strong>Roles</strong> (<em>Administration &gt; Organization &gt; Roles &amp; Permissions</em>): conjuntos de permissões atribuídos a usuários.</li>
+  <li><strong>Business Manager Modules</strong>: <em>Read</em> ou <em>Write</em> por módulo, por contexto (organização ou sites). Read-only também vale para chamadas de API do usuário.</li>
+  <li><strong>Functional permissions</strong>: ações específicas, como gerenciar price books de site ou executar jobs.</li>
+  <li><strong>WebDAV permissions</strong>: leitura e escrita em pastas (<code>/catalogs/*</code>, <code>/libraries/*</code>, <code>/dynamic/*</code>…).</li>
+  <li>Roles com triângulo amarelo são sensíveis (gerenciam usuários ou roles).</li>
+</ul>
+<aside class="callout" data-kind="best">
+<p>Princípio do menor privilégio: devs com escrita em Staging só nos módulos necessários; em Production, normalmente leitura. Separe quem define e quem executa replicações (as best practices de replicação sugerem isso). Novos módulos de BM (cartridges <code>bm_*</code>) precisam de permissão explícita.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="setup" data-k="cap. 10">
+<h2>Roteiro: preparar um site numa sandbox nova</h2>
+<div class="prose">
+<ol class="steps">
+  <li>Code Deployment: crie e ative <code>version1</code>; envie os cartridges.</li>
+  <li>Importe os metadados do projeto (atributos, CO types, preferências, serviços, jobs) com Site Import ou <code>b2c job import</code>.</li>
+  <li>Importe ou crie o site (ID, moeda, taxação) e os dados (catálogos, price books, inventário, conteúdo).</li>
+  <li>Defina o cartridge path do site e o do BM (se houver <code>bm_*</code>).</li>
+  <li>Locales: ative na organização e depois no site; moedas.</li>
+  <li>Cache: page cache desligado e TTL de estático 0 (só na sandbox).</li>
+  <li>Storefront URLs desligadas no início; aliases, se testar hostnames.</li>
+  <li>Reconstrua os índices de busca.</li>
+  <li>Configure os serviços (credentials de teste ou mock) e as permissões de OCAPI, se o projeto usar.</li>
+  <li>Abra o storefront pelo menu <em>Storefront</em> do BM e faça o smoke test.</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Hotfix direto na code version ativa de Production.</strong> Production nem aceita esse upload; e mesmo em Staging, sem versão nova não há rollback.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Importar um export de Production com Users e Access Roles</strong> numa sandbox: sobrescreve usuários e permissões.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Configurar preferências à mão em cada instância</strong> sem versionar. Use o XML de preferências (com blocos por instância) no repositório.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>Cartridge path: <em>Manage Sites &gt; (site) &gt; Settings</em>.</li>
+  <li>Site novo: ID, moeda padrão e taxação (Net ou Gross).</li>
+  <li>Locale: ativar na organização (Global Preferences) <strong>antes</strong> de permitir no site.</li>
+  <li>Custom preference: atributo em <code>SitePreferences</code> ou <code>OrganizationPreferences</code> via System Object Types, mais um attribute group.</li>
+  <li>Site Import &amp; Export não leva código.</li>
+  <li>Compatibility mode: ativar mais novo ou voltar ao anterior; nunca mais antigo que o anterior.</li>
+  <li>Aliases são por instância e não são replicados.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>"System template default used directly or indirectly in custom site"</td><td>Código enviado para outra code version que não a ativa</td><td>Confira a versão ativa e o <code>code-version</code> do <code>dw.json</code> (dica da própria documentação).</td></tr>
+<tr><td>Upload para Staging recusado</td><td>Exige certificado de cliente (2FA)</td><td>Configure o certificado no CLI ou na IDE, ou faça o deploy pelo pipeline com o certificado.</td></tr>
+<tr><td>Rollback falhou</td><td>A versão anterior foi apagada (retenção)</td><td>Reenvie a versão a partir do Git.</td></tr>
+<tr><td>Locale não aparece no seletor do site</td><td>Não ativado na organização, ou não permitido no site</td><td>Global Preferences &gt; Locales e depois Site Preferences &gt; Locales.</td></tr>
+<tr><td>Preferência custom não aparece no BM</td><td>Atributo fora de grupo</td><td>Adicione a um attribute group de <code>SitePreferences</code>.</td></tr>
+<tr><td>Import falhou</td><td>XML fora do XSD; ordem de dependências; caracteres especiais em nomes de arquivo</td><td>Leia o log do processo (link na tela de import); valide contra o XSD.</td></tr>
+<tr><td>Site responde em um hostname e não em outro</td><td>Aliases da instância</td><td>Configure o arquivo de aliases nesta instância (não é replicado).</td></tr>
+<tr><td>Módulo do BM com erro em hostname próprio</td><td>Hostname fora da allowlist do BM</td><td>Adicione-o em Business Manager &gt; Hostnames.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Diferenciar Merchant Tools e Administration e achar as telas de dev.</li>
+  <li>Gerenciar code versions (ativar, rollback, retenção, regras de upload) e compatibility modes.</li>
+  <li>Criar um site (ID, moeda, taxação), ligar dados e configurar cartridge path, cache e status.</li>
+  <li>Configurar locales (organização e depois site), moedas e fusos.</li>
+  <li>Criar e ler preferências custom globais e de site; usar valores por instância no XML.</li>
+  <li>Usar Site Import &amp; Export e os módulos de Import &amp; Export corretamente (sem Users e Roles).</li>
+  <li>Configurar Storefront URLs, aliases e redirects.</li>
+  <li>Gerenciar roles e permissões com menor privilégio.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Quais informações são definidas ao criar um site no BM?</p>
+  <ol class="opts-l"><li>ID, moeda padrão e taxação (Net/Gross)</li><li>Catálogo e price book</li><li>Cartridge path e code version</li><li>Locale e fuso</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>a.</strong> O resto se configura depois, nas abas e módulos do site.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Um dev precisa de uma preferência que liga uma feature só no site BR. Como criar?</p>
+  <ol class="opts-l"><li>Custom object</li><li>Atributo em SitePreferences (System Object Types) + attribute group; valor em Custom Preferences do site BR</li><li>Variável no código</li><li>Global preference</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> No código: <code>Site.getCurrent().getCustomPreferenceValue('id')</code>.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Por que uma importação de dados de Production numa sandbox deve desmarcar Users e Access Roles?</p>
+  <ol class="opts-l"><li>Porque não são exportáveis</li><li>Para não sobrescrever os usuários e as permissões do destino</li><li>Porque deixam o import lento</li><li>Porque violam quota</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> É o aviso da documentação de Site Import &amp; Export.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual destes itens não faz parte de um Site Export?</p>
+  <ol class="opts-l"><li>Custom object types</li><li>Site preferences</li><li>Os cartridges (código)</li><li>Price books</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>c.</strong> Código se move por upload e code replication.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">A instância está no compatibility mode 21.2 (o anterior era 19.10). Qual pode ser ativado?</p>
+  <ol class="opts-l"><li>18.10</li><li>19.10 ou um mais novo que 21.2 (ex.: 22.7)</li><li>Só 21.2</li><li>Qualquer um</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Dá para voltar ao anterior ou subir; nunca descer abaixo do anterior.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">O site precisa aceitar o locale <code>es_AR</code>, mas ele não aparece em Site Preferences &gt; Locales. Por quê?</p>
+  <ol class="opts-l"><li>Falta reindexar</li><li>O locale não foi ativado na organização (Global Preferences &gt; Locales)</li><li>Falta price book</li><li>Cache</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> A organização vem primeiro.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-managing-sites-for-dev.html">Create and Manage Sites for Development</a></li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-code-deployment.html">Code Deployment</a>: code versions, compatibility modes, uploads seguros, estágios.</li>
+  <li>Salesforce Help: <a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_site_import_export.htm&amp;type=5">Site Import/Export</a>, <a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_import_export_object_cheatsheet.htm&amp;type=5">Import and Export Object Cheatsheet</a>, <a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_global_preferences.htm&amp;type=5">Global Preferences</a>, <a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_configuring_site_locales.htm&amp;type=5">Site Locales</a>, <a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_creating_roles.htm&amp;type=5">Create a Role</a>, <a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_feature_switches.htm&amp;type=5">Feature Switches</a>.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-localization.html">Localization</a>: locales, fallback.</li>
+  <li>XSD oficial <code>preferences.xsd</code> (b2c CLI: <code>b2c docs schema preferences</code>).</li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-developer-tooling/cli/sites.html">B2C CLI: sites e job import/export</a></li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

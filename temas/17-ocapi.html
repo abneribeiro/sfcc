@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>17 · OCAPI e SCAPI · Guia SFCC</title>
+<meta name="description" content="Open Commerce API (Shop, Data, Meta): estrutura de URL, versões, client ID, OCAPI Settings, JWT e OAuth, métodos HTTP, expand e select, atributos c_, resource state, cache e batch; hooks dw.ocapi.shop.* (before, after, modifyResponse) e circuit breaker; SCAPI, SLAS e Custom APIs; status atual de depreciação da OCAPI.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="17" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>OCAPI e SCAPI: as APIs REST do B2C Commerce</h1>
+  <p class="lead">O exame cobra a <strong>OCAPI</strong> (Open Commerce API): recursos, URLs, métodos, permissões e, sobretudo, <strong>hooks</strong> para customizar a lógica de negócio. A plataforma, porém, já mudou: a OCAPI foi marcada como <em>deprecated</em> em abril de 2026, e o caminho para projetos novos é a <strong>SCAPI</strong> (B2C Commerce API) com o <strong>SLAS</strong>. A boa notícia é que os <strong>hooks são os mesmos</strong> (<code>dw.ocapi.shop.*</code>) nas duas APIs. Este tema cobre a OCAPI como a prova pede e mostra o equivalente em SCAPI.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>OCAPI</dt><dd>API REST que roda no servidor de aplicação da instância. Tem três partes: <strong>Shop API</strong> (comprador ou agente comprando por ele: produtos, busca, cesta, pedidos, clientes), <strong>Data API</strong> (acesso CRUD a recursos do merchant: catálogos, cupons, conteúdo, jobs, site preferences…) e <strong>Meta API</strong> (descrição formal da API, inclusive atributos custom).</dd>
+  <dt>Client ID</dt><dd>Identificador da aplicação cliente, criado no <strong>Account Manager</strong>. É obrigatório em <em>toda</em> requisição; sem ele, a resposta é 400.</dd>
+  <dt>OCAPI Settings</dt><dd>Documento JSON configurado no BM (<em>Administration &gt; Site Development &gt; Open Commerce API Settings</em>) que diz o que cada client ID pode acessar. Por padrão, nada é permitido: a resposta é 401 (<code>UnauthorizedException</code>).</dd>
+  <dt>Hook</dt><dd>Ponto de extensão (<code>dw.ocapi.shop.basket.items.beforePOST</code> etc.) implementado num cartridge e registrado no <code>hooks.json</code>. Executa script B2C antes, depois ou na montagem da resposta.</dd>
+  <dt>SCAPI</dt><dd>B2C Commerce API (também chamada de Salesforce Commerce API): APIs REST em OAS 3.0 servidas por um gateway com CDN, em <code>{shortCode}.api.commercecloud.salesforce.com</code>. Divide-se em <strong>Shopper APIs</strong> (SLAS) e <strong>Admin APIs</strong> (token do Account Manager).</dd>
+  <dt>SLAS</dt><dd>Shopper Login and API Access Service: serviço OAuth 2.1 que emite tokens de comprador (guest ou registrado) aceitos pela SCAPI e pela OCAPI Shop API.</dd>
+  <dt>Custom API</dt><dd>Endpoint REST próprio exposto pela SCAPI. É definido num cartridge (<code>rest-apis/</code>) com contrato OAS, script e <code>api.json</code>.</dd>
+</dl>
+<aside class="callout" data-kind="verify">
+<p><strong>Status atual (2026).</strong> A documentação oficial diz que <em>"OCAPI is marked deprecated as of April 2026"</em>, que projetos novos devem usar SCAPI exclusivamente e que, a partir de 1º de setembro de 2026, os OCAPI Settings deixam de estar disponíveis para realms de clientes novos. Não há data de EOL para a OCAPI em realms existentes. O guia do exame ainda lista a OCAPI; estude-a para a prova e use SCAPI em projetos novos.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="urls" data-k="cap. 2">
+<h2>Anatomia de uma URL OCAPI</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="text" data-file="padrões oficiais">
+# base URL
+produção:      https://{public_domain}[/s/{site_id}]/dw/{api_type}/
+não-produção:  https://{host}/s/{site_id}/dw/{api_type}/        api_type = shop | data | meta
+
+# Data API para recursos da organização (sem site): site_id "-"
+https://{host}/s/-/dw/data/v24_5/libraries/SiteGenesis/content/about-us
+
+# URL estendida
+{base}/{version}/{resource_type}                                 GET  /dw/shop/v24_5/products/(123,456,789)
+{base}/{version}/{resource_type}/{identifier}                    GET  /dw/shop/v24_5/products/123FOO456bar
+{base}/{version}/{resource_type}/{action}                        POST /dw/shop/v24_5/customers/auth
+{base}/{version}/{resource_type}/{id}/{relationship}             GET  /dw/shop/v24_5/baskets/12345/items
+{base}/{version}/{resource_type}/{id}/{relationship}/{rel_id}    PATCH /dw/shop/v24_5/baskets/12345/items/abc
+</script>
+<ul>
+  <li><strong>Versão</strong>: <code>v</code> + número com underscore (<code>v24_5</code> = 24.5). Cada versão define um conjunto fixo de recursos e propriedades. Versões novas podem acrescentar e depreciar, e a versão antiga continua respondendo igual. Fixe a versão no cliente.</li>
+  <li><strong>Identificadores</strong> são <em>case-sensitive</em> e devem ser URL-encoded (<code>foo#bar</code> → <code>foo%23bar</code>). Vários IDs vão entre parênteses: <code>(123,456)</code>.</li>
+  <li><strong>Client ID</strong>: precedência <em>Bearer token</em> &gt; parâmetro <code>client_id</code> &gt; header <code>x-dw-client-id</code>.</li>
+  <li><strong>Parâmetros comuns</strong>: <code>locale</code>, <code>currency</code>, <code>expand</code>, <code>select</code>, <code>start</code> e <code>count</code> (paginação), <code>q</code> e <code>refine</code> (busca).</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="settings" data-k="cap. 3">
+<h2>OCAPI Settings: permissões por client ID</h2>
+<div class="prose">
+<p>No BM você escolhe o <strong>tipo</strong> (Shop ou Data) e o <strong>contexto</strong> (Global ou um site) e edita o JSON. A configuração do site sobrescreve a global para aquele client ID. A maioria dos recursos da Data API é da organização e, por isso, só aceita configuração Global. As mudanças levam <strong>até 3 minutos</strong> para valer (cache).</p>
+<script type="text/plain" class="src" data-lang="json" data-file="BM › Open Commerce API Settings › Shop › RefArch">
+{
+  "_v": "24.5",
+  "clients": [
+    {
+      "client_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "allowed_origins": ["https://www.acme.com"],
+      "resources": [
+        {
+          "resource_id": "/products/*",
+          "methods": ["get"],
+          "read_attributes": "(**)",
+          "write_attributes": "(**)",
+          "cache_time": 900
+        },
+        {
+          "resource_id": "/products/*/availability",
+          "methods": ["get"],
+          "read_attributes": "(**)",
+          "write_attributes": "(**)",
+          "config": { "product.inventory.ats.max_threshold": "100" }
+        },
+        {
+          "resource_id": "/product_search",
+          "methods": ["get"],
+          "read_attributes": "(**)",
+          "write_attributes": "(**)",
+          "cache_time": 300
+        },
+        { "resource_id": "/customers/auth", "methods": ["post"], "read_attributes": "(**)", "write_attributes": "(**)" },
+        { "resource_id": "/baskets/**",     "methods": ["get", "post", "patch", "delete"], "read_attributes": "(**)", "write_attributes": "(**)" },
+        { "resource_id": "/baskets/*/items", "methods": ["post"], "read_attributes": "(**)", "write_attributes": "(product_id,quantity,c_giftMessage)" },
+        { "resource_id": "/orders",          "methods": ["post"], "read_attributes": "(**)", "write_attributes": "(**)" }
+      ]
+    }
+  ]
+}
+</script>
+<table>
+<thead><tr><th>Propriedade</th><th>Significado</th></tr></thead>
+<tbody>
+<tr><td><code>_v</code></td><td>Versão do <em>formato do arquivo</em>, independente da versão da API chamada.</td></tr>
+<tr><td><code>resource_id</code></td><td>Padrão Ant: <code>/products/*</code>, <code>/products/specific_id/images</code>, <code>/baskets/**</code> (todos os sub-recursos).</td></tr>
+<tr><td><code>methods</code></td><td>Filtro de métodos HTTP (obrigatório).</td></tr>
+<tr><td><code>read_attributes</code> / <code>write_attributes</code></td><td>Sintaxe de <em>property selection</em> que limita o que sai na resposta e o que pode entrar no corpo.</td></tr>
+<tr><td><code>cache_time</code></td><td>Segundos (0 a 86.400; padrão 60). Só vale para GET/HEAD de recursos cacheáveis da Shop API, e exige o Page Caching do site habilitado.</td></tr>
+<tr><td><code>personalized_caching_enabled</code></td><td>Desliga o cache personalizado por JWT quando a resposta não varia por cliente.</td></tr>
+<tr><td><code>version_range</code></td><td><code>{"from": "23.1", "until": "24.5"}</code>: permissão só para um intervalo de versões (<code>until</code> não incluso).</td></tr>
+<tr><td><code>config</code></td><td>Ajustes especiais: limite de ATS exposto, price books em <code>/products/*/prices</code>, view types de imagem.</td></tr>
+</tbody>
+</table>
+<aside class="callout" data-kind="exam">
+<p>Expansions são sub-recursos para efeito de permissão: liberar <code>/products/*</code> <strong>não</strong> libera <code>/products/*/images</code>. Para usar <code>expand=images,prices</code> é preciso ter permissão em cada sub-recurso.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="auth" data-k="cap. 4">
+<h2>Autenticação: JWT de cliente e OAuth</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Cenário</th><th>Mecanismo</th><th>Validade</th></tr></thead>
+<tbody>
+<tr><td>Dados públicos da Shop API (produto, busca)</td><td>Só o client ID; sem login</td><td>n/a</td></tr>
+<tr><td>Comprador guest ou registrado (Shop API)</td><td><strong>JWT</strong> via <code>POST /customers/auth</code> com <code>type</code> = <code>guest</code>, <code>credentials</code> (Basic com login e senha), <code>session</code> ou <code>refresh</code></td><td>30 min; renove trocando o token antes de expirar</td></tr>
+<tr><td>Cliente autenticado por sistema externo</td><td><code>POST /customers/auth/trustedsystem</code> com token OAuth da aplicação</td><td>JWT</td></tr>
+<tr><td>Integração servidor a servidor (Data API)</td><td><strong>OAuth client credentials</strong> em <code>account.demandware.com/dwsso/oauth2/access_token</code></td><td>30 min</td></tr>
+<tr><td>Agente agindo como usuário do BM</td><td>OAuth <em>Business Manager user grant</em> na própria instância</td><td>15 min (sujeito ao IP allowlist do BM)</td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="src" data-lang="bash" data-file="JWT guest e chamada à Shop API">
+HOST=https://dev01-realm-acme.demandware.net
+CID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+# 1. JWT de convidado (vem no header de resposta "Authorization: Bearer …")
+curl -si -X POST "$HOST/s/RefArch/dw/shop/v24_5/customers/auth?client_id=$CID" \
+     -H 'Content-Type: application/json' -d '{"type":"guest"}' | grep -i '^authorization'
+
+# 2. cria a cesta e adiciona um item
+curl -s -X POST "$HOST/s/RefArch/dw/shop/v24_5/baskets" -H "Authorization: Bearer $JWT"
+curl -s -X POST "$HOST/s/RefArch/dw/shop/v24_5/baskets/$BASKET/items" \
+     -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+     -d '[{"product_id":"701644329396M","quantity":1}]'
+</script>
+<script type="text/plain" class="src" data-lang="bash" data-file="OAuth client credentials e Data API">
+# token da aplicação (Basic = base64(client_id:client_secret))
+TOKEN=$(curl -s -X POST https://account.demandware.com/dwsso/oauth2/access_token \
+  -u "$CID:$SECRET" -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d 'grant_type=client_credentials' | jq -r .access_token)
+
+# lê um conteúdo de biblioteca (recurso da organização → site "-")
+curl -s "$HOST/s/-/dw/data/v24_5/libraries/RefArchSharedLibrary/content/about-us" \
+     -H "Authorization: Bearer $TOKEN"
+
+# atualização parcial de um produto (custom attribute)
+curl -s -X PATCH "$HOST/s/-/dw/data/v24_5/products/25695327M" \
+     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"c_sustainabilityScore": 87}'
+</script>
+<aside class="callout" data-kind="note">
+<p>O token é reutilizado até expirar, porque pedir um token novo por chamada é anti-padrão de performance. O <code>client_id</code> fica embutido no JWT (claim <code>iss</code>) e não precisa ser repetido.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="metodos" data-k="cap. 5">
+<h2>Métodos, documentos e recursos de consulta</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Método</th><th>Semântica na OCAPI</th></tr></thead>
+<tbody>
+<tr><td>GET / HEAD</td><td>Leitura; cacheáveis (Shop API).</td></tr>
+<tr><td>POST</td><td>Cria (ex.: cesta, item, pedido) ou executa uma <em>action</em> (<code>/customers/auth</code>).</td></tr>
+<tr><td>PUT</td><td>Cria ou <strong>substitui</strong>: limpa as propriedades ausentes no corpo.</td></tr>
+<tr><td>PATCH</td><td>Atualização <strong>parcial</strong>: só mexe nas propriedades enviadas; não cria.</td></tr>
+<tr><td>DELETE</td><td>Remove.</td></tr>
+</tbody>
+</table>
+<p>Clientes que só falam GET/POST usam o header <code>x-dw-http-method-override: DELETE</code> (ou PUT, PATCH, HEAD, OPTIONS) numa requisição POST.</p>
+<h3 id="select-expand">select, expand, c_ e resource state</h3>
+<script type="text/plain" class="src" data-lang="text" data-file="exemplos">
+# expand: pede sub-recursos junto (products e product_search)
+GET /dw/shop/v24_5/products/25695327M?expand=availability,prices,images,variations
+
+# select: corta a resposta (property selection)
+GET /dw/shop/v24_5/products/25695327M?select=(id,name,price,c_sustainabilityScore)
+GET /dw/shop/v24_5/products/123/variations?select=(name,id,variation_attributes.(**))
+GET ...?select=(variation_attributes[?(@.name=='color')].(**))
+
+# atributos custom sempre com prefixo c_ (leitura e escrita)
+"c_mediaFormat": ["0010", "0020"], "c_memorySize": "1GB"
+
+# optimistic locking: devolva o _resource_state recebido; se mudou → 409 ResourceStateConflictException
+{ "_resource_state": "ba4e8438...", "name": "Novo nome" }
+</script>
+<ul>
+  <li><strong>Batch</strong>: <code>POST</code> multipart com até <strong>50</strong> sub-requisições, cada uma com o seu método.</li>
+  <li><strong>Erros</strong>: 400 (fault de validação ou <code>Status.ERROR</code> de um hook), 401 (token, permissão ou origem não autorizada), 404, 409 (conflito de estado), 500 (exceção não tratada em hook), 503 (<code>HookCircuitBreakerException</code>).</li>
+  <li><strong>Meta API</strong>: <code>GET /dw/meta/rest/shop/v24_5?client_id=…</code> lista todos os <code>resource_id</code> da versão. É útil para montar os Settings.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="hooks" data-k="cap. 6">
+<h2>Hooks: customizar a lógica de negócio</h2>
+<div class="prose">
+<p>Recursos que modificam estado (cesta, pedido, cliente…) e vários de leitura oferecem três tipos de extension point:</p>
+<script type="text/plain" class="mmd" data-caption="processamento de uma requisição com hooks (OCAPI e SCAPI)">
+sequenceDiagram
+  participant C as Cliente
+  participant S as Servidor B2C
+  participant H as Hooks (cartridge)
+  C->>S: POST /baskets/{id}/items
+  Note over S,H: início da transação (POST/PUT/PATCH/DELETE)
+  S->>H: beforePOST(basket, items)
+  H-->>S: Status OK (ERROR → rollback + 400)
+  S->>S: aplica o documento ao objeto
+  S->>H: afterPOST(basket, items)
+  H-->>S: Status OK (ex.: dw.order.calculate)
+  S->>S: lógica de sistema e commit
+  S->>S: monta o documento de resposta
+  S->>H: modifyPOSTResponse(basket, basketResponse, items)
+  Note over H: fora de transação: só mexa no documento
+  S-->>C: 200 + JSON
+</script>
+<table>
+<thead><tr><th>Tipo</th><th>Uso</th><th>Regras</th></tr></thead>
+<tbody>
+<tr><td><code>before&lt;METHOD&gt;</code></td><td>Validar ou normalizar a entrada</td><td>Recebe o objeto Script API e o documento de requisição.</td></tr>
+<tr><td><code>after&lt;METHOD&gt;</code></td><td>Alterar o objeto, recalcular, chamar serviços dentro da transação</td><td>Não altere o documento de requisição (ele não é reprocessado).</td></tr>
+<tr><td><code>modify&lt;METHOD&gt;Response</code></td><td>Enriquecer ou remover campos da resposta (inclusive <code>c_</code>)</td><td><strong>Sem transação</strong>: modificar objetos persistentes causa <code>ORMTransactionException</code> e 500. Em GET com cache, só roda quando o cache está vazio ou vencido.</td></tr>
+<tr><td>Convenience hooks</td><td><code>dw.order.calculate</code>, <code>validateBasket</code>, <code>validateOrder</code></td><td>Centralizam o cálculo da cesta em vez de duplicá-lo em cada <code>after</code>.</td></tr>
+</tbody>
+</table>
+<h3 id="registrar-hook">Registrando e implementando</h3>
+<script type="text/plain" class="src" data-lang="json" data-file="cartridges/int_acme_ocapi/package.json">
+{
+  "hooks": "./cartridge/scripts/hooks.json"
+}
+</script>
+<script type="text/plain" class="src" data-lang="json" data-file="cartridges/int_acme_ocapi/cartridge/scripts/hooks.json">
+{
+  "hooks": [
+    { "name": "dw.ocapi.shop.basket.items.beforePOST", "script": "./hooks/basketItems.js" },
+    { "name": "dw.ocapi.shop.basket.items.afterPOST",  "script": "./hooks/basketItems.js" },
+    { "name": "dw.ocapi.shop.product.modifyGETResponse", "script": "./hooks/product.js" },
+    { "name": "dw.ocapi.shop.order.afterPOST", "script": "./hooks/order.js" }
+  ]
+}
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/int_acme_ocapi/cartridge/scripts/hooks/basketItems.js">
+'use strict';
+
+var Status = require('dw/system/Status');
+var HookMgr = require('dw/system/HookMgr');
+var ProductMgr = require('dw/catalog/ProductMgr');
+
+var MAX_QTY_PER_LINE = 10;
+
+/**
+ * Regra de negócio: no máximo 10 unidades por linha e só produtos "vendáveis online".
+ * @param {dw.order.Basket} basket - cesta atual
+ * @param {Array} items - documentos ProductItem enviados no corpo
+ * @returns {dw.system.Status} OK ou ERROR (→ 400 + rollback)
+ */
+exports.beforePOST = function (basket, items) {
+    for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        if (item.quantity > MAX_QTY_PER_LINE) {
+            return new Status(Status.ERROR, 'QUANTITY_LIMIT', 'Máximo de ' + MAX_QTY_PER_LINE + ' unidades por item.');
+        }
+        var product = ProductMgr.getProduct(item.productId);
+        if (product && product.custom.blockOnlineSale) {
+            return new Status(Status.ERROR, 'NOT_SELLABLE', 'Produto indisponível para venda online.');
+        }
+    }
+    return new Status(Status.OK);
+};
+
+/**
+ * Depois de adicionar: recalcula a cesta (promoções, impostos, totais) via convenience hook.
+ */
+exports.afterPOST = function (basket) {
+    return HookMgr.callHook('dw.order.calculate', 'calculate', basket);
+};
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/int_acme_ocapi/cartridge/scripts/hooks/product.js">
+'use strict';
+
+var Status = require('dw/system/Status');
+
+/**
+ * Enriquecer a resposta de GET /products/{id} com um atributo calculado.
+ * @param {dw.catalog.Product} scriptProduct - objeto Script API (somente leitura aqui)
+ * @param {Object} doc - documento Product da resposta
+ */
+exports.modifyGETResponse = function (scriptProduct, doc) {
+    var score = scriptProduct.custom.sustainabilityScore;
+    doc.c_isEco = typeof score === 'number' && score >= 80;
+    return new Status(Status.OK);
+};
+</script>
+<h3 id="regras-hooks">Regras que caem na prova</h3>
+<ul>
+  <li>O nome exportado é o nome do hook <strong>sem o pacote</strong>: <code>dw.ocapi.shop.basket.items.beforePOST</code> é exportado como <code>beforePOST</code>.</li>
+  <li>Retorne um <code>dw.system.Status</code>. <strong>OK</strong> deixa o processamento continuar; <strong>ERROR</strong> encerra, faz rollback e responde 400 com o código e a mensagem do status; uma exceção vira 500 com rollback.</li>
+  <li>Se o hook <strong>não retornar Status</strong>, outros scripts registrados para o mesmo hook (inclusive a implementação base sobrescrita) podem ser executados. Um Status não nulo encerra a cadeia.</li>
+  <li>Para passar dados entre hooks da mesma requisição, use <code>request.custom</code> (ex.: <code>afterPOST</code> grava o id do pagamento, <code>modifyPOSTResponse</code> o devolve).</li>
+  <li>O cartridge precisa estar no <strong>cartridge path do site</strong>. Para recursos da organização (bibliotecas, Data API), ele vai no cartridge path do <strong>Business Manager</strong>.</li>
+  <li><strong>Circuit breaker</strong>: se mais de 50 das últimas 100 chamadas a um hook falharem, ele "abre" por 60 s (503 <code>HookCircuitBreakerException</code>) e depois testa 10 chamadas (half-open). Investigue no Log Center buscando <code>HookCircuitBreaker</code>.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="scapi" data-k="cap. 7">
+<h2>SCAPI e SLAS: o equivalente moderno</h2>
+<div class="prose">
+<table>
+<thead><tr><th></th><th>OCAPI</th><th>SCAPI</th></tr></thead>
+<tbody>
+<tr><td>Host</td><td>A própria instância (<code>/dw/shop</code>, <code>/dw/data</code>)</td><td><code>https://{shortCode}.api.commercecloud.salesforce.com/{family}/{api}/v1/organizations/{organizationId}/…</code></td></tr>
+<tr><td>Contrato</td><td>Documentação proprietária, versões <code>v24_5</code></td><td>OAS 3.0; <code>v1</code> com mudanças aditivas sem troca de versão (Shopper Baskets também tem <code>v2</code>)</td></tr>
+<tr><td>Auth do comprador</td><td>JWT via <code>/customers/auth</code></td><td><strong>SLAS</strong> (OAuth 2.1, com refresh token)</td></tr>
+<tr><td>Auth administrativa</td><td>OAuth do Account Manager + OCAPI Settings</td><td>Token do Account Manager com <strong>scopes</strong> (<code>sfcc.catalogs</code>, …) e <code>SALESFORCE_COMMERCE_API:{realm}_{instance}</code></td></tr>
+<tr><td>Permissões</td><td>JSON de OCAPI Settings</td><td>Scopes do cliente (SLAS ou Account Manager)</td></tr>
+<tr><td>Cache</td><td>Cache da resposta inteira (<code>cache_time</code>)</td><td>Cache no web tier/CDN por objeto</td></tr>
+<tr><td>Customização</td><td>Hooks <code>dw.ocapi.shop.*</code></td><td><strong>Os mesmos hooks</strong> (habilitar a feature switch de hooks no BM) + <strong>Custom APIs</strong></td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="src" data-lang="bash" data-file="SCAPI: token guest (SLAS private client) e Shopper Products">
+SC=kv7kzm78; ORG=f_ecom_zzte_053
+
+curl "https://$SC.api.commercecloud.salesforce.com/shopper/auth/v1/organizations/$ORG/oauth2/token" \
+  -u "$SLAS_CLIENT_ID:$SLAS_SECRET" \
+  -d "grant_type=client_credentials" \
+  -d "channel_id=RefArch"                       # obrigatório para tokens guest
+
+curl "https://$SC.api.commercecloud.salesforce.com/product/shopper-products/v1/organizations/$ORG/products/25695327M?siteId=RefArch" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+</script>
+<ul>
+  <li><strong>Tipos de cliente SLAS</strong>: <em>public</em> (SPA como a PWA Kit, app mobile; usa <code>authorization_code_pkce</code>) e <em>private</em> (backend, BFF, storefront tradicional; usa <code>client_credentials</code> ou <code>authorization_code</code> com segredo).</li>
+  <li>O access token vale <strong>30 min</strong>. O refresh token vale 90 dias (registrado) ou 30 dias (guest) em produção, e 9 dias fora de produção. Em clientes public, o refresh token é de uso único.</li>
+  <li>O token SLAS também é aceito pela OCAPI Shop API. Isso permite migração gradual e storefronts híbridos (SFRA + PWA, com <em>Hybrid Auth</em>).</li>
+  <li>Não misture scopes: nada de scopes de shopper em clientes do Account Manager, nem de admin em clientes SLAS.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="custom-api" data-k="cap. 8">
+<h2>Custom APIs (SCAPI)</h2>
+<div class="prose">
+<p>Quando nenhum recurso padrão atende, a SCAPI permite publicar um endpoint REST próprio a partir de um cartridge. São três peças na pasta <code>cartridge/rest-apis/{api-name}/</code> (nome em minúsculas, números e hífens):</p>
+<script type="text/plain" class="src" data-lang="text" data-file="estrutura">
+int_acme_loyalty/
+└── cartridge/
+    └── rest-apis/
+        └── loyalty-info/
+            ├── api.json        # mapeia endpoint → schema → script
+            ├── schema.yaml     # contrato OAS 3.0 (info.version 1.x → URL v1)
+            └── script.js       # implementação; função = operationId
+</script>
+<script type="text/plain" class="src" data-lang="json" data-file="rest-apis/loyalty-info/api.json">
+{
+  "endpoints": [
+    { "endpoint": "getLoyaltyInfo", "schema": "schema.yaml", "implementation": "script" }
+  ]
+}
+</script>
+<script type="text/plain" class="src" data-lang="text" data-file="rest-apis/loyalty-info/schema.yaml (trecho)">
+openapi: 3.0.0
+info:
+  version: 1.0.0
+  title: Loyalty Information API
+components:
+  securitySchemes:
+    ShopperToken:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://{shortCode}.api.commercecloud.salesforce.com/shopper/auth/v1/organizations/{org}/oauth2/token
+          scopes:
+            c_loyaltyInfo_r: Read loyalty information of a customer
+paths:
+  /customers:
+    get:
+      operationId: getLoyaltyInfo
+      parameters:
+        - { in: query, name: c_customer_id, required: true,  schema: { type: string } }
+        - { in: query, name: siteId,        required: true,  schema: { type: string, minLength: 1 } }
+        - { in: query, name: locale,        required: false, schema: { type: string, minLength: 1 } }
+      responses:
+        "200": { description: OK }
+        "404": { description: Customer not found }
+security:
+  - ShopperToken: ["c_loyaltyInfo_r"]
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="rest-apis/loyalty-info/script.js">
+'use strict';
+
+var RESTResponseMgr = require('dw/system/RESTResponseMgr');
+var CustomerMgr = require('dw/customer/CustomerMgr');
+
+exports.getLoyaltyInfo = function () {
+    var customerNo = request.getHttpParameterMap().get('c_customer_id').getStringValue();
+    var profile = CustomerMgr.getProfile(customerNo);
+
+    if (!profile) {
+        RESTResponseMgr.createError(404, 'customer-not-found', 'Customer Unknown', 'Unknown customer ID.').render();
+        return;
+    }
+    RESTResponseMgr.createSuccess({
+        tier: profile.custom.loyaltyTier || 'basic',
+        points: profile.custom.loyaltyPoints || 0
+    }).render();
+};
+exports.getLoyaltyInfo.public = true;
+</script>
+<ul>
+  <li>URL: <code>https://{shortCode}.api.commercecloud.salesforce.com/custom/loyalty-info/v1/organizations/{org}/customers?c_customer_id=…&amp;siteId=RefArch</code>.</li>
+  <li><strong>Registro</strong>: acontece ao <strong>ativar a code version</strong> que contém a API. Por isso, trabalhe numa versão nova e troque quando estiver pronto.</li>
+  <li><strong>Shopper × Admin</strong>: Shopper exige <code>siteId</code> e o esquema <code>ShopperToken</code>; Admin omite <code>siteId</code>, usa <code>AmOAuth2</code> e o cartridge vai no path do Business Manager.</li>
+  <li>Respostas sempre em JSON; erros no formato RFC 9457 (pelo menos <code>type</code>). Custom APIs também têm circuit breaker.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Liberar <code>"/**"</code> com <code>(**)</code></strong> para um client ID público. Libere só os recursos, métodos e atributos necessários.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Alterar objetos persistentes em <code>modify…Response</code> ou em hook de GET</strong>: não há transação, o que gera <code>ORMTransactionException</code> e 500.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Chamar serviço externo lento em hook sem timeout</strong>: as falhas acumulam e abrem o circuit breaker do hook (503 para todos).</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Pedir um token novo a cada requisição.</strong> Reutilize até expirar.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>Shop API = comprador/agente; Data API = recursos do merchant; Meta API = descrição.</li>
+  <li>Client ID obrigatório (400 sem ele); sem permissão nos Settings → 401 <code>UnauthorizedException</code>.</li>
+  <li>PUT substitui (limpa o que falta); PATCH é parcial.</li>
+  <li>Atributos custom: prefixo <code>c_</code>.</li>
+  <li><code>expand</code> pede sub-recursos; <code>select</code> filtra propriedades.</li>
+  <li>Hook ERROR → 400 + rollback; exceção → 500.</li>
+  <li>Registro do hook: <code>package.json</code> → <code>hooks.json</code>; cartridge no path do site.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>400 <code>MissingClientIdException</code> / 401 <code>UnknownClientIdException</code></td><td>Client ID ausente, desconhecido ou desabilitado no Account Manager</td><td>Use <code>client_id</code>, o header <code>x-dw-client-id</code> ou um Bearer token.</td></tr>
+<tr><td>401 <code>UnauthorizedException</code> (ou <code>UnauthorizedOriginException</code>)</td><td>Recurso, método ou versão ausente nos Settings; contexto errado (site × global)</td><td>Ajuste o JSON; espere até 3 min; confira <code>version_range</code>.</td></tr>
+<tr><td>Atributo não aparece na resposta</td><td><code>read_attributes</code> restritivo; sub-recurso sem <code>expand</code> ou sem permissão</td><td>Ajuste a seleção e o expand, e libere o sub-recurso.</td></tr>
+<tr><td>Hook não executa</td><td>Cartridge fora do path do site ou do BM; <code>hooks.json</code> não referenciado; nome exportado errado; feature switch de hooks da SCAPI desligada</td><td>Revise o registro e o export (<code>beforePOST</code>…).</td></tr>
+<tr><td>500 com <code>ORMTransactionException</code></td><td>Escrita em <code>modifyResponse</code> ou GET</td><td>Mova a escrita para <code>after…</code>.</td></tr>
+<tr><td>503 <code>HookCircuitBreakerException</code></td><td>Mais de 50% de falhas no hook</td><td>Log Center → <code>HookCircuitBreaker</code> → stack trace "Caused by".</td></tr>
+<tr><td>409 <code>ResourceStateConflictException</code></td><td><code>_resource_state</code> desatualizado</td><td>Releia o recurso e reenvie com o estado novo.</td></tr>
+<tr><td>Resposta desatualizada</td><td><code>cache_time</code> da Shop API; <code>modifyGETResponse</code> só roda em cache miss</td><td>Reduza o <code>cache_time</code> ou mova a personalização.</td></tr>
+<tr><td>Custom API 404</td><td>Code version não reativada; cartridge fora do path do site do <code>siteId</code></td><td>Ative a versão; confira o path; veja o Custom API Status Report.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Montar URLs OCAPI (shop, data, meta; versão; identificador; relação; action).</li>
+  <li>Criar um client ID no Account Manager e configurar os OCAPI Settings (site × global, recursos, métodos, atributos, cache).</li>
+  <li>Obter JWT de comprador e token OAuth para a Data API.</li>
+  <li>Diferenciar GET, POST, PUT e PATCH; usar expand, select e <code>c_</code>.</li>
+  <li>Implementar e registrar hooks before, after e modifyResponse com o retorno de Status correto.</li>
+  <li>Explicar a relação OCAPI → SCAPI (SLAS, scopes, hooks compartilhados, Custom APIs) e o status de depreciação.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Um app chama <code>GET /dw/shop/v24_5/products/123</code> e recebe 401 <code>UnauthorizedException</code>, mesmo com o client ID correto. O que verificar primeiro?</p>
+  <ol class="opts-l"><li>O cartridge path</li><li>Os OCAPI Settings (Shop, contexto do site ou global) para <code>/products/*</code> com <code>get</code></li><li>O índice de busca</li><li>A replicação</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Por padrão nenhum recurso é permitido, e os Settings controlam recurso, método, atributos e versão.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual hook usar para impedir que um item com quantidade maior que 10 entre na cesta via API?</p>
+  <ol class="opts-l"><li><code>dw.ocapi.shop.basket.items.modifyPOSTResponse</code></li><li><code>dw.ocapi.shop.basket.items.beforePOST</code> retornando <code>Status.ERROR</code></li><li><code>dw.ocapi.shop.product.modifyGETResponse</code></li><li><code>dw.order.calculate</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O <code>before</code> valida a entrada; ERROR faz rollback e responde 400.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Um hook <code>modifyGETResponse</code> grava <code>product.custom.views++</code> e a API passa a responder 500. Por quê?</p>
+  <ol class="opts-l"><li>Atributo custom sem <code>c_</code></li><li>Hooks de modifyResponse e de GET não rodam em transação; escrever em objeto persistente gera ORMTransactionException</li><li>Quota de hooks</li><li>Falta de expand</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Além disso, produtos são somente leitura no contexto do storefront.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual a diferença entre PUT e PATCH na OCAPI?</p>
+  <ol class="opts-l"><li>Nenhuma</li><li>PUT cria ou substitui e limpa propriedades ausentes; PATCH atualiza só as enviadas e não cria</li><li>PATCH cria; PUT não</li><li>PUT só existe na Shop API</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong></p></div></details>
+</li>
+<li>
+  <p class="drill-q">Como uma integração servidor a servidor obtém acesso à Data API?</p>
+  <ol class="opts-l"><li>JWT de cliente guest</li><li>Token OAuth <code>client_credentials</code> do Account Manager + permissões nos Settings da Data API</li><li>Cookie <code>dwsid</code></li><li>Login no BM</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong></p></div></details>
+</li>
+<li>
+  <p class="drill-q">Os hooks <code>dw.ocapi.shop.*</code> também executam em chamadas SCAPI?</p>
+  <ol class="opts-l"><li>Não, a SCAPI só tem Custom APIs</li><li>Sim, são os mesmos extension points, desde que a execução de hooks esteja habilitada na feature switch</li><li>Só na Data API</li><li>Só para SLAS</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Os nomes mantêm o prefixo histórico <code>dw.ocapi.shop</code>.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Quando uma Custom API nova fica disponível?</p>
+  <ol class="opts-l"><li>Logo após o upload</li><li>Ao ativar a code version que a contém (registro dos endpoints)</li><li>Após reindexar</li><li>Após replicar</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong></p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/references/b2c-commerce-ocapi/get-started-with-ocapi.html">Get Started With OCAPI</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/references/b2c-commerce-ocapi/urlschema.html">URL Syntax</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/references/b2c-commerce-ocapi/ocapisettings.html">OCAPI Settings</a></li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/references/b2c-commerce-ocapi/jwt.html">JWT</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/references/b2c-commerce-ocapi/oauth.html">OAuth 2.0</a>, HTTP Methods, Property Selection, Expansions, Custom Properties, Resource States, Caching, Batch Requests</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/references/b2c-commerce-ocapi/customization.html">OCAPI Customization</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/references/b2c-commerce-ocapi/hooks-shop.html">Hooks for Shop API</a>, Hook Circuit Breaker</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/commerce-api/guide/why-use-scapi.html">The Advantages of SCAPI</a> (depreciação e mapa OCAPI → SCAPI), Get Started with the B2C Commerce API, Base URL</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/commerce-api/guide/slas.html">SLAS Overview</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/commerce-api/guide/extensibility_via_hooks.html">Customization with Hooks</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/commerce-api/guide/custom-apis.html">Custom APIs</a></li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

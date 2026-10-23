@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>01 · Arquitetura do B2C Commerce · Guia SFCC</title>
+<meta name="description" content="Arquitetura do Salesforce B2C Commerce: realm, PIG e SIG, tipos de instância, replicação de dados e código, on-demand sandboxes, ciclo de vida de um request, web adapter, motor de script e opções de storefront.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="01" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Arquitetura do B2C Commerce</h1>
+  <p class="lead">Antes de escrever uma linha de controller, você precisa saber <strong>onde</strong> o código roda, <strong>como</strong> ele chega lá e <strong>por que</strong> os dados que você mexe numa instância podem sumir na próxima replicação. Este tema monta o mapa mental de toda a plataforma: realm, grupos de instâncias, replicação, sandboxes, o caminho de um request do navegador até o banco e o motor de script que executa o seu JavaScript.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<p>O B2C Commerce (o antigo Demandware) é um <strong>SaaS multi-tenant</strong>. Você não administra servidores, sistema operacional, banco de dados, balanceador de carga nem CDN. A Salesforce hospeda, escala e atualiza a plataforma, e você entrega duas coisas:</p>
+<ul>
+  <li><strong>Código</strong>, empacotado em <em>cartridges</em>: controllers, scripts, templates ISML, forms, recursos estáticos, metadados de Page Designer.</li>
+  <li><strong>Dados e configuração</strong>: catálogos, price books, inventário, conteúdo, promoções, preferências, definições de objetos, jobs, serviços.</li>
+</ul>
+<p>Essa separação aparece em toda a arquitetura. Código e dados seguem caminhos diferentes, versionam de jeitos diferentes e são promovidos entre ambientes por processos diferentes.</p>
+
+<h3 id="glossario">Glossário essencial</h3>
+<dl class="gloss">
+  <dt>Realm</dt><dd>O conjunto de todas as instâncias de um cliente. É identificado por um código de quatro letras (por exemplo <code>zzpq</code>), que aparece nos hostnames e nos IDs de sandbox (<code>zzpq-001</code>). Um cliente pode ter mais de um realm (por região, por exemplo).</dd>
+  <dt>Instância</dt><dd>Um ambiente completo e isolado: tem o seu próprio esquema de banco de dados, o seu file system compartilhado (cartridges, imagens, logs) e o seu Business Manager. Duas instâncias nunca compartilham dados, a não ser por replicação ou import/export.</dd>
+  <dt>PIG</dt><dd><em>Primary Instance Group</em>. As três instâncias "oficiais" do realm: <strong>Staging</strong>, <strong>Development</strong> e <strong>Production</strong>. A replicação só acontece dentro do PIG, sempre a partir de Staging.</dd>
+  <dt>SIG</dt><dd><em>Secondary Instance Group</em>. As sandboxes dos desenvolvedores. Hoje são <strong>On-Demand Sandboxes (ODS)</strong>, criadas e destruídas por API ou CLI. Ficam fora da replicação.</dd>
+  <dt>POD / Hyperforce</dt><dd>O POD era o cluster físico, num data center da Salesforce, que hospedava vários realms. Os realms estão migrando para o <strong>Hyperforce</strong>, a infraestrutura em nuvem pública da Salesforce. O POD importa para o desenvolvedor em detalhes como IPs de saída (allowlists em firewalls de parceiros) e janelas de manutenção.</dd>
+  <dt>Organization</dt><dd>Nível acima dos sites dentro de uma instância. Preferências globais (<em>Global Preferences</em>), objetos com escopo de organização e configurações como locales ativos vivem aqui.</dd>
+  <dt>Site</dt><dd>Uma loja (storefront) dentro da instância. Uma instância pode ter vários sites, cada um com cartridge path, catálogo, price books, inventário e preferências próprios.</dd>
+  <dt>Business Manager (BM)</dt><dd>A interface administrativa web de cada instância, em <code>https://&lt;host&gt;/on/demandware.store/Sites-Site</code>. Merchandisers, administradores e desenvolvedores usam o BM.</dd>
+  <dt>Code version</dt><dd>Um diretório nomeado no servidor (por exemplo <code>release_2026_10</code>) com um conjunto de cartridges. Só uma code version fica <em>ativa</em> por instância.</dd>
+  <dt>Compatibility mode</dt><dd>A versão da API de script com que uma code version roda (por exemplo 22.7). Define recursos de linguagem (ES6+) e comportamentos de API.</dd>
+  <dt>Storefront</dt><dd>A loja que o comprador vê. Pode ser renderizada no servidor (SFRA, SiteGenesis) ou num front-end headless (PWA Kit, Storefront Next) que consome APIs.</dd>
+</dl>
+
+<script type="text/plain" class="mmd" data-caption="realm, grupos de instâncias e fluxos de promoção">
+flowchart TB
+  subgraph REALM["Realm do cliente (ex.: zzpq)"]
+    subgraph PIG["PIG · Primary Instance Group"]
+      STG["Staging<br/>fonte da verdade<br/>dados + código"]
+      DEV["Development<br/>QA / UAT"]
+      PRD["Production<br/>loja real"]
+    end
+    subgraph SIG["SIG · On-Demand Sandboxes"]
+      S1["zzpq-001"]
+      S2["zzpq-002"]
+      S3["zzpq-00N"]
+    end
+  end
+  GIT["Git + CI"] -- "upload de code version<br/>(WebDAV / CLI)" --> STG
+  GIT -- "upload" --> S1
+  STG -- "Data Replication" --> DEV
+  STG -- "Data Replication" --> PRD
+  STG -- "Code Replication" --> DEV
+  STG -- "Code Replication" --> PRD
+  STG -. "site export → import<br/>(nunca replicação)" .-> S2
+  PRD -. "pedidos, clientes<br/>(nascem em PRD)" .-> ERP["ERP / OMS"]
+</script>
+
+<aside class="callout" data-kind="exam">
+<p>Se uma alternativa fala em "replicar de Staging para a sandbox", é distrator. A documentação diz: <em>"You can't use replication to copy data from staging to a developer sandbox"</em>. Para levar dados a uma sandbox, exporte de Staging e importe na sandbox.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="instancias" data-k="cap. 2">
+<h2>Os quatro tipos de instância</h2>
+<div class="prose">
+<p>Existem quatro tipos de instância: <strong>Sandbox</strong>, <strong>Staging</strong>, <strong>Development</strong> e <strong>Production</strong>. Elas não diferem só no nome: cache, verificações de file system, release da plataforma e o que se pode fazer com dados mudam de uma para outra. A tabela abaixo segue a documentação oficial de instâncias.</p>
+
+<table>
+<thead><tr><th></th><th>Sandbox</th><th>Staging</th><th>Development</th><th>Production</th></tr></thead>
+<tbody>
+<tr><td>Grupo</td><td>SIG</td><td>PIG</td><td>PIG</td><td>PIG</td></tr>
+<tr><td>Uso</td><td>Desenvolvedor cria e testa código</td><td>Merchandising; destino do deploy de código</td><td>Simula produção; teste final de código + conteúdo</td><td>Loja ao vivo, transações reais</td></tr>
+<tr><td>Cache</td><td>Desligado; checagem completa de file system</td><td>Desligado; checagem completa de file system; fora do CDN</td><td>Desligado; sem checagem de file system; passa pelo CDN sem cachear</td><td>Ligado até o navegador; conectado ao CDN</td></tr>
+<tr><td>Dados</td><td>Entram por import (a maioria dos system jobs fica desligada)</td><td>Upload de dados e código; origem da replicação</td><td>Recebe replicação de Staging</td><td>Recebe replicação; gera active data e dados transacionais</td></tr>
+<tr><td>Release da plataforma</td><td>Recebe antes (Preview)</td><td>GA</td><td>GA</td><td>GA</td></tr>
+<tr><td>Storefront Toolkit</td><td>Sim</td><td>Sim</td><td>Sim</td><td><strong>Desabilitado</strong></td></tr>
+</tbody>
+</table>
+
+<h3 id="quem-usa">Quem usa cada instância</h3>
+<ul>
+  <li><strong>Desenvolvedor:</strong> Sandbox e Staging. Escreve e testa na sandbox e é responsável pelo upload de código em Staging. Pode exportar de Staging os dados criados pelos merchandisers para usar como massa de teste nas sandboxes. Não desenvolve em Development.</li>
+  <li><strong>Merchandiser:</strong> Staging. Cria campanhas e promoções, gerencia produtos, configura a busca.</li>
+  <li><strong>QA:</strong> Development, em condições o mais próximas possível de Production.</li>
+  <li><strong>Administrador:</strong> todas. Concede acessos, reinicia instâncias, gerencia feeds de dados, faz upload de certificados.</li>
+</ul>
+
+<h3 id="hostnames">Hostnames e URLs que você vai ver todo dia</h3>
+<p>As instâncias do PIG seguem o padrão <code>&lt;instância&gt;-&lt;realm&gt;-&lt;cliente&gt;.demandware.net</code>, por exemplo <code>staging-zzpq-acme.demandware.net</code>. As on-demand sandboxes usam <code>&lt;realm&gt;-&lt;nnn&gt;.dx.commercecloud.salesforce.com</code>, por exemplo <code>zzpq-001.dx.commercecloud.salesforce.com</code>. Os caminhos têm prefixos fixos que revelam quem atende o request:</p>
+<script type="text/plain" class="src" data-lang="text" data-file="anatomia das URLs de uma instância">
+# Business Manager (o "site" administrativo chama-se Sites-Site)
+https://zzpq-001.dx.commercecloud.salesforce.com/on/demandware.store/Sites-Site
+
+# Storefront sem SEO URLs: Sites-<SiteID>-Site / <locale> / <Controller>-<Action>
+https://zzpq-001.dx.commercecloud.salesforce.com/on/demandware.store/Sites-RefArch-Site/en_US/Product-Show?pid=25686364M
+
+# Recursos estáticos de um cartridge (versionados pelo fingerprint da code version)
+https://.../on/demandware.static/Sites-RefArch-Site/-/default/v1729612345678/js/main.js
+
+# WebDAV: onde o código é enviado (uma pasta por code version)
+https://.../on/demandware.servlet/webdav/Sites/Cartridges/release_2026_10/app_custom/
+
+# WebDAV: logs, impex e catálogos
+https://.../on/demandware.servlet/webdav/Sites/Logs/
+https://.../on/demandware.servlet/webdav/Sites/Impex/
+</script>
+<p>Em Production, com SEO URLs e aliases configurados, o comprador vê algo como <code>https://www.acme.com/pt-br/tenis-corrida-25686364M.html</code>. O B2C Commerce mapeia essa URL amigável para <code>Product-Show</code> por meio das URL rules do BM.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="replicacao" data-k="cap. 3">
+<h2>Replicação de dados e de código</h2>
+<div class="prose">
+<p>Replicação é o mecanismo que promove o que foi preparado em <strong>Staging</strong> para <strong>Development</strong> ou <strong>Production</strong>. Há dois processos independentes, e os dois são criados e executados <strong>em Staging</strong> (até o Publishing e o Undo, que só afetam o destino).</p>
+
+<h3 id="data-replication">Data Replication</h3>
+<p>Copia dados, metadados e arquivos. Funciona em dois níveis:</p>
+<ul>
+  <li><strong>Global</strong>: configuração da organização inteira (custom object types, preferências globais, catálogos, price books, bibliotecas compartilhadas, OCAPI settings globais, static content…).</li>
+  <li><strong>Site</strong>: dados de um ou mais sites (campanhas, slots, conteúdo da biblioteca privada, preferências do site, índices de busca, shipping, taxação, URLs de SEO…).</li>
+</ul>
+<p>Os dados selecionados <strong>substituem</strong> os correspondentes no destino. Se Staging e Development têm os catálogos A, B e C, e em Staging você atualiza B, apaga C e cria D, replicar "Catalogs" deixa Development assim: A intocado, B atualizado, C apagado, D criado. O que não foi selecionado não muda.</p>
+
+<table>
+<thead><tr><th>Tipo de processo</th><th>O que faz</th></tr></thead>
+<tbody>
+<tr><td><strong>Transfer</strong></td><td>Copia os dados para o destino sem afetar os dados em uso lá. Precisa de um Publishing depois.</td></tr>
+<tr><td><strong>Transfer &amp; Publishing</strong></td><td>Copia e substitui imediatamente.</td></tr>
+<tr><td><strong>Publishing</strong></td><td>Publica o que foi transferido antes. As tarefas precisam ser exatamente as mesmas do Transfer. Desligue a indexação incremental durante o Publishing.</td></tr>
+<tr><td><strong>Undo</strong></td><td>Reverte o destino ao estado anterior à última replicação publicada. Só vale para a última, e não atravessa uma GA release (um processo de 24.7 não pode ser desfeito em 24.8).</td></tr>
+</tbody>
+</table>
+
+<h3 id="nao-replica">O que a replicação de dados não leva</h3>
+<p>A documentação lista o que precisa ser criado ou importado diretamente em cada instância. Estes itens caem muito em prova:</p>
+<ul>
+  <li>Clientes e atribuições a customer groups; pedidos e informações de pedido; gift certificates; dados de pagamento</li>
+  <li><strong>Inventário</strong>; active data; sitemaps; redemptions de source code</li>
+  <li><strong>Usuários, roles e permissões</strong>; o perfil da organização</li>
+  <li><strong>Job schedules e histórico</strong>; batch processes; feeds de importação de catálogo e conteúdo</li>
+  <li>Custom error pages; arquivos enviados mas não importados</li>
+</ul>
+
+<h3 id="ordem">Ordem e dependências</h3>
+<ol class="steps">
+  <li>A primeira replicação para cada destino é uma <strong>replicação global completa</strong>; não dá para escolher tarefas nessa primeira vez.</li>
+  <li>Alterou um system object type ou criou um custom object type? Replique <strong>Custom Object Types</strong> (definições) antes de qualquer objeto daquele tipo.</li>
+  <li>Campanhas dependem de source codes, customer groups e coupons: replique-os <strong>antes ou junto</strong>, sob risco de corromper dados.</li>
+  <li>Catálogos para produção vão <strong>junto com os índices de busca</strong>. Reconstrua o índice antes, espere terminar e desligue a indexação incremental e as reconstruções agendadas durante a replicação.</li>
+  <li>Teste cada processo de Staging para Development antes de levar para Production, e não rode dois processos ao mesmo tempo.</li>
+  <li>Em Production, faça primeiro <em>Transfer</em>, confira os logs e só então <em>Publishing</em>; agende para horários de pouco tráfego, porque replicar consome recursos.</li>
+</ol>
+
+<h3 id="code-replication">Code Replication</h3>
+<p>Transfere uma <strong>code version</strong> de Staging para Development ou Production e pode ativá-la no destino. Os tipos são <em>Transfer</em>, <em>Activation</em>, <em>Transfer &amp; Activation</em> e <em>Undo</em>. O Undo reativa a code version que estava ativa antes. Em sandboxes não há code replication: o código chega por upload (WebDAV ou CLI) e é ativado em <em>Administration &gt; Site Development &gt; Code Deployment</em>.</p>
+
+<script type="text/plain" class="mmd" data-caption="Transfer e Publishing separados ajudam a isolar falhas">
+sequenceDiagram
+  autonumber
+  participant BM as BM de Staging
+  participant STG as Staging
+  participant PRD as Production
+  BM->>STG: cria processo "Transfer" (Catalogs + Search Indexes)
+  STG->>PRD: copia os dados (não afetam o que está no ar)
+  BM->>BM: confere logs de replicação (origem e destino)
+  BM->>STG: cria processo "Publishing" com as MESMAS tarefas
+  STG->>PRD: publica: dados substituem os atuais
+  PRD->>PRD: cache de página invalidado
+  Note over BM,PRD: Algo errado? "Undo" reverte a última publicação
+</script>
+
+<aside class="callout" data-kind="warn">
+<p>Nunca edite dados replicáveis nem o cartridge path direto em Production. A próxima replicação de Staging apaga essas alterações (o "drift" entre ambientes), e mudanças de código ou cartridge path feitas lá podem gerar versões diferentes da mesma página. Toda alteração nasce em Staging.</p>
+</aside>
+
+<aside class="callout" data-kind="exam">
+<p>Custom objects criados em Production (log de webhooks, por exemplo) sumiram depois de uma replicação? O <strong>tipo</strong> estava como replicável e a tarefa de custom objects sobrescreveu os registros. Dados que nascem em Production precisam de um tipo marcado como <strong>Not Replicable</strong>. Veja o <a class="text-link" href="13-custom-objects.html">tema 13</a>.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="sandboxes" data-k="cap. 4">
+<h2>On-Demand Sandboxes</h2>
+<div class="prose">
+<p>A sandbox é a sua instância pessoal de desenvolvimento. As On-Demand Sandboxes (ODS) rodam em nuvem pública e são criadas sob demanda por uma API self-service. Na prática:</p>
+<ul>
+  <li><strong>Créditos:</strong> o realm compra créditos. Uma sandbox ligada consome créditos de <em>uptime</em> por minuto (o perfil <em>medium</em>, padrão, consome 1 crédito por minuto; <em>large</em> e <em>xlarge</em> consomem mais). Desligada, consome 0,3 crédito por minuto. Apagada, não consome.</li>
+  <li><strong>TTL:</strong> na criação dá para definir um time-to-live em horas, e a sandbox é apagada sozinha quando ele vence (0 significa infinito, se o realm permitir).</li>
+  <li><strong>Nasce vazia:</strong> sem código e sem dados. Você faz upload do código e importa os dados (o site de demonstração do SFRA, ou um export de Staging).</li>
+  <li><strong>Permissões:</strong> a gestão passa pelo Account Manager (role <em>Sandbox API User</em>), e na criação você define as permissões de OCAPI e WebDAV para o seu client ID.</li>
+  <li><strong>Sem replicação:</strong> a SIG não participa da replicação.</li>
+</ul>
+
+<h3 id="sandbox-cli">Gerenciando sandboxes pela linha de comando</h3>
+<p>Dá para usar o <code>sfcc-ci</code> (legado) ou o <strong>b2c CLI</strong> oficial (<code>@salesforce/b2c-cli</code>). Os exemplos abaixo usam o b2c CLI:</p>
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal">
+# listar as sandboxes do realm zzpq
+b2c sandbox list --realm zzpq
+
+# criar uma sandbox com TTL de 48h e perfil padrão (medium); --wait espera ficar pronta
+b2c sandbox create --realm zzpq --ttl 48 --wait
+
+# ligar, desligar, reiniciar, apagar (aceita UUID ou o formato realm-número)
+b2c sandbox stop zzpq-001
+b2c sandbox start zzpq-001
+b2c sandbox restart zzpq-001
+b2c sandbox delete zzpq-001 --force
+</script>
+
+<aside class="callout" data-kind="best">
+<p>Prefira apagar e recriar sandboxes com um script (criação, upload de código, import de dados) a mantê-las paradas por semanas: paradas, ainda consomem créditos. Só pare e religue uma sandbox quando precisar preservar exatamente os dados que estão nela.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="request" data-k="cap. 5">
+<h2>O caminho de um request</h2>
+<div class="prose">
+<p>Entender a infraestrutura de uma instância de Production explica o comportamento de cache, sessão e performance. Os componentes, segundo a documentação de troubleshooting de infraestrutura:</p>
+<dl class="gloss">
+  <dt>eCDN</dt><dd>CDN embutido (embedded CDN). Serve conteúdo a partir de pontos próximos ao comprador, absorve picos de tráfego e oferece WAF e HSTS. Cacheia conteúdo estático na borda.</dd>
+  <dt>Firewall / load balancer</dt><dd>Controla o que entra e sai e distribui os requests entre os web servers.</dd>
+  <dt>Web server + Web Adapter</dt><dd>O Web Adapter é um plugin proprietário do web server. Ele cuida do <strong>page cache</strong>, monta a página a partir de <strong>remote includes</strong> e distribui a carga entre os application servers. Production tem pelo menos dois web servers.</dd>
+  <dt>Application servers</dt><dd>Executam a lógica de negócio e a apresentação (controllers, scripts, ISML). Production tem pelo menos dois.</dd>
+  <dt>Banco e file system</dt><dd>Todos os application servers de uma instância usam o mesmo esquema de banco de dados e o mesmo file system compartilhado (cartridges, imagens, logs). Instâncias diferentes usam esquemas diferentes.</dd>
+</dl>
+
+<script type="text/plain" class="mmd" data-caption="request de storefront em Production">
+sequenceDiagram
+  autonumber
+  participant B as Navegador
+  participant CDN as eCDN
+  participant WA as Web server + Web Adapter
+  participant PC as Page cache
+  participant AS as Application server
+  participant DB as Banco + file system
+  B->>CDN: GET /pt-br/tenis.html
+  CDN->>WA: request dinâmico (estático pode voltar da borda)
+  WA->>PC: há versão válida em cache?
+  alt cache hit
+    PC-->>WA: HTML cacheado
+  else cache miss
+    WA->>AS: encaminha (mesmo app server da sessão)
+    AS->>DB: controller → script → API dw.* → dados
+    AS-->>WA: HTML + diretivas de cache + remote includes
+    WA->>AS: um request por remote include (cada um com cache próprio)
+    WA->>PC: armazena as partes cacheáveis
+  end
+  WA-->>B: página montada
+</script>
+
+<h3 id="sessao">Afinidade de sessão</h3>
+<p>Web servers e Web Adapter são <strong>stateless</strong>: o load balancer distribui os requests de uma sessão entre eles aleatoriamente. Já os application servers são <strong>session-aware</strong>: guardam atributos de sessão, autenticação e dados de formulário. Por isso, todos os requests de uma sessão vão para o <strong>mesmo application server</strong>. O Web Adapter cria o <strong>session ID</strong> no primeiro request e o guarda no cookie <code>sid</code>; o valor codifica, entre outras coisas, qual application server foi escolhido.</p>
+
+<h3 id="request-id">Request ID e remote includes</h3>
+<p>Cada request recebe do Web Adapter um <strong>request ID</strong>, que aparece nos logs. Cada <em>remote include</em> é um request adicional ao application server, com cache próprio. O ID dele estende o do request principal no formato <code>requestID-profundidade-número</code>:</p>
+<script type="text/plain" class="src" data-lang="text" data-file="request IDs de uma página com remote includes">
+main request:                         ZAm5zUVvcQ4KAgAK-0-00
+1º remote include da página:          ZAm5zUVvcQ4KAgAK-1-01
+2º remote include da página:          ZAm5zUVvcQ4KAgAK-1-02
+3º remote include da página:          ZAm5zUVvcQ4KAgAK-1-03
+remote include dentro do 3º:          ZAm5zUVvcQ4KAgAK-2-04
+</script>
+<p>É assim que uma página de categoria fica cacheada por 24 horas enquanto o minicart (um remote include sem cache) mostra a cesta de cada comprador. O detalhe de implementação está nos temas <a class="text-link" href="10-isml.html#includes">10 (ISML)</a> e <a class="text-link" href="20-performance.html">20 (performance)</a>.</p>
+
+<h3 id="cache-tipos">Dois caches</h3>
+<ul>
+  <li><strong>Static content cache:</strong> imagens, CSS, JS. Tem TTL configurável, e as URLs carregam um fingerprint (o <code>v1729612345678</code> do exemplo anterior) que muda quando você ativa outra code version.</li>
+  <li><strong>Page cache:</strong> HTML gerado a partir de ISML quando a resposta declara cache (<code>&lt;iscache&gt;</code> ou, no SFRA, o middleware de cache). Só funciona com a preferência de page cache ligada no BM, e é invalidado por expiração, por replicação ou por limpeza manual no BM.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="motor" data-k="cap. 6">
+<h2>O motor de script</h2>
+<div class="prose">
+<p>O JavaScript do servidor roda num interpretador baseado no <strong>Rhino</strong> (JavaScript sobre a JVM), dentro do application server. Não é Node.js. Isso tem consequências práticas:</p>
+<ul>
+  <li><strong>Não existe</strong> <code>npm install</code> em runtime, nem <code>fs</code>, <code>process</code>, <code>setTimeout</code> ou <code>fetch</code>. Você usa as APIs <code>dw.*</code> (<code>dw.net.HTTPClient</code> e o Service Framework para HTTP, <code>dw.io.File</code> para arquivos na área IMPEX, e assim por diante).</li>
+  <li>Os módulos seguem <strong>CommonJS</strong>: <code>require('dw/system/Logger')</code>, <code>require('*/cartridge/scripts/helpers/x')</code>, <code>module.exports</code>.</li>
+  <li>Cada request é isolado: <strong>um script não guarda estado entre execuções</strong>. Para manter estado use a sessão (<code>session.custom</code> e <code>session.privacy</code>), objetos persistentes (custom objects ou atributos) ou cookies.</li>
+  <li>Há <strong>timeouts</strong> de script e <strong>quotas</strong> de API (número de objetos, tamanho de coleções, chamadas por request). Estouro de quota pode quebrar o request; isso fica para o <a class="text-link" href="20-performance.html">tema 20</a>.</li>
+</ul>
+
+<h3 id="compat">Compatibility mode e recursos de linguagem</h3>
+<p>Cada code version declara um <em>compatibility mode</em> (10.4 a 22.7). Ele decide o dialeto de JavaScript e alguns comportamentos da API. Você descobre o modo ativo com <code>System.getCompatibilityMode()</code>, que devolve um número (22.7 vira <code>2207</code>).</p>
+<table>
+<thead><tr><th>Modo</th><th>O que muda (resumo da documentação)</th></tr></thead>
+<tbody>
+<tr><td>&lt; 21.2</td><td>ECMAScript 5.</td></tr>
+<tr><td>21.2</td><td>Parte do ES6+: <code>let</code>/<code>const</code> com escopo de bloco, arrow functions, <code>for…of</code>, generators, destructuring de objetos, <code>Map</code>, <code>Set</code>, <code>Symbol</code>, typed arrays, métodos novos em <code>String</code>/<code>Array</code>/<code>Object</code>. Shorthand <em>de propriedades</em> ainda não. Novas palavras reservadas (<code>class</code>, <code>import</code>, <code>export</code>…).</td></tr>
+<tr><td>22.7</td><td>Mais ES6+: shorthand de propriedades, template literals, <code>bigint</code>, <code>globalThis</code>, operador <code>**</code>, <code>Object.values</code> e <code>Object.entries</code>.</td></tr>
+</tbody>
+</table>
+
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/app_custom/cartridge/scripts/util/runtimeInfo.js">
+'use strict';
+
+/**
+ * Dados de runtime úteis em logs e páginas de diagnóstico.
+ * Funciona em qualquer compatibility mode (usa só sintaxe ES5).
+ */
+var System = require('dw/system/System');
+var Site = require('dw/system/Site');
+
+var TYPES = {};
+TYPES[System.DEVELOPMENT_SYSTEM] = 'development'; // 0: inclui as sandboxes
+TYPES[System.STAGING_SYSTEM] = 'staging';         // 1
+TYPES[System.PRODUCTION_SYSTEM] = 'production';   // 2
+
+function describe() {
+    return {
+        instanceType: TYPES[System.getInstanceType()],
+        hostname: System.getInstanceHostname(),
+        compatibilityMode: System.getCompatibilityMode(), // ex.: 2207
+        siteId: Site.getCurrent().getID(),
+        timezone: System.getInstanceTimeZone()
+    };
+}
+
+module.exports = { describe: describe };
+</script>
+
+<aside class="callout" data-kind="note">
+<p>Sandboxes e a instância Development reportam o mesmo tipo, <code>System.DEVELOPMENT_SYSTEM</code> (0). Para separar "sandbox" de "development", não use o tipo de instância: use credenciais de serviço ou preferências diferentes por instância (o próximo capítulo mostra como).</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="storefronts" data-k="cap. 7">
+<h2>Arquiteturas de storefront</h2>
+<div class="prose">
+<p>A mesma plataforma de back-end (catálogo, preços, promoções, pedidos, jobs) atende storefronts construídos de formas diferentes. O exame de Developer é centrado no <strong>SFRA</strong>, mas você precisa reconhecer os outros modelos.</p>
+<table>
+<thead><tr><th>Modelo</th><th>Como renderiza</th><th>Tecnologia</th><th>Quando aparece</th></tr></thead>
+<tbody>
+<tr><td><strong>SiteGenesis</strong> (legado)</td><td>Servidor</td><td>Pipelines (XML visual) ou controllers SGJC, ISML</td><td>Sites antigos; manutenção. Não é base para projetos novos.</td></tr>
+<tr><td><strong>SFRA</strong></td><td>Servidor</td><td>Controllers JavaScript (módulo <code>server</code>), models, ISML, Bootstrap, JS e SCSS de cliente com webpack</td><td>O foco do exame. Base de referência para sites renderizados no servidor.</td></tr>
+<tr><td><strong>Headless / composable</strong></td><td>Front-end separado (React)</td><td>PWA Kit ou Storefront Next consumindo a <strong>SCAPI</strong> (Shopper APIs, com autenticação SLAS) e, em projetos antigos, a OCAPI</td><td>Arquiteturas desacopladas; o back-end continua usando hooks, jobs e o mesmo modelo de dados.</td></tr>
+</tbody>
+</table>
+<p>Mesmo num projeto headless você vai escrever cartridges: hooks (como <code>dw.order.calculate</code>), custom APIs, jobs, integrações e extensões do BM. O que muda é a camada de apresentação.</p>
+
+<h3 id="camadas">As camadas de um site SFRA</h3>
+<script type="text/plain" class="mmd" data-caption="camadas lógicas de um request SFRA">
+flowchart LR
+  URL["URL<br/>Product-Show"] --> CTRL["Controller<br/>(server.get)"]
+  CTRL --> MW["Middlewares<br/>(cache, https, csrf…)"]
+  MW --> MODEL["Models / factories<br/>(dw.* → objeto JSON-friendly)"]
+  MODEL --> API["Script API dw.*<br/>(ProductMgr, BasketMgr…)"]
+  API --> DATA["Dados da instância"]
+  CTRL --> VIEW["ISML<br/>res.render()"]
+  VIEW --> HTML["HTML"]
+  CTRL --> JSON["res.json()"]
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="ambiente" data-k="cap. 8">
+<h2>Código consciente do ambiente</h2>
+<div class="prose">
+<p>O mesmo código roda em todas as instâncias, porque a code version ativa em Production é exatamente a que foi testada em Staging. Então o código não pode carregar endpoints, credenciais nem chaves fixas. O que muda por instância deve vir da <strong>configuração</strong> de cada instância.</p>
+
+<h3 id="onde-configurar">Onde guardar o que muda por ambiente</h3>
+<table>
+<thead><tr><th>O que muda</th><th>Onde configurar</th><th>Replica de Staging?</th></tr></thead>
+<tbody>
+<tr><td>URL e credenciais de um serviço externo</td><td><em>Administration &gt; Operations &gt; Services</em>: Service Credential</td><td>Não. Configure em cada instância (é exatamente o que você quer).</td></tr>
+<tr><td>Ligar ou desligar uma feature por site</td><td>Custom site preference (atributo em <em>SitePreferences</em>)</td><td>Sim, pela tarefa Preferences. O XML de preferências aceita valores <code>all-instances</code> e também por tipo de instância (<code>development</code>, <code>staging</code>, <code>production</code>), então o mesmo arquivo carrega valores diferentes por ambiente (<a class="text-link" href="14-business-manager.html#preferencias">tema 14</a>).</td></tr>
+<tr><td>Usar mock em vez do serviço real</td><td>Service profile/status ou <code>mockCall</code> no Service Framework</td><td>Configuração de serviço por instância.</td></tr>
+<tr><td>Comportamento só de produção</td><td><code>System.getInstanceType() === System.PRODUCTION_SYSTEM</code></td><td>Não depende de dados; use com moderação.</td></tr>
+</tbody>
+</table>
+
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/int_erp/cartridge/scripts/services/erpService.js" data-note="O código pede o serviço pelo ID. Endpoint, usuário e senha vêm do Service Credential de cada instância, então o mesmo código fala com o ERP de homologação em Staging e com o de produção em Production.">
+'use strict';
+
+var LocalServiceRegistry = require('dw/svc/LocalServiceRegistry');
+
+/**
+ * 'erp.http.order' é configurado em cada instância (Service + Profile + Credential).
+ * Nada de URL, usuário ou senha no código.
+ */
+module.exports = LocalServiceRegistry.createService('erp.http.order', {
+    createRequest: function (svc, payload) {
+        svc.setRequestMethod('POST');
+        svc.addHeader('Content-Type', 'application/json');
+        return JSON.stringify(payload);
+    },
+    parseResponse: function (svc, httpClient) {
+        return JSON.parse(httpClient.text);
+    },
+    // usado quando o serviço está em modo mock no BM (sandbox sem acesso ao ERP)
+    mockCall: function () {
+        return { statusCode: 200, statusMessage: 'OK', text: '{"accepted":true,"mock":true}' };
+    },
+    filterLogMessage: function (msg) {
+        return msg.replace(/"cardNumber":"\d+"/g, '"cardNumber":"****"');
+    }
+});
+</script>
+
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/app_custom/cartridge/scripts/helpers/featureFlags.js">
+'use strict';
+
+var Site = require('dw/system/Site');
+var System = require('dw/system/System');
+
+/**
+ * Feature flag por site: atributo custom "enableNewCheckout" (Boolean) em SitePreferences.
+ * Criado em Administration > Site Development > System Object Types > SitePreferences.
+ */
+function isNewCheckoutEnabled() {
+    return Site.getCurrent().getCustomPreferenceValue('enableNewCheckout') === true;
+}
+
+/** Só para diagnósticos: nunca para escolher endpoints ou credenciais. */
+function isProduction() {
+    return System.getInstanceType() === System.PRODUCTION_SYSTEM;
+}
+
+module.exports = {
+    isNewCheckoutEnabled: isNewCheckoutEnabled,
+    isProduction: isProduction
+};
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Identificar o ambiente pelo hostname.</strong> <code>if (request.httpHost === 'www.acme.com')</code> quebra com aliases, eCDN, domínio novo ou um teste em Development. Use configuração por instância.</p>
+<script type="text/plain" class="src" data-lang="js">
+// RUIM
+if (request.httpHost === 'www.acme.com') { endpoint = 'https://erp.acme.com'; }
+// BOM: endpoint vem do Service Credential configurado em cada instância
+var svc = require('*/cartridge/scripts/services/erpService');
+</script>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Editar catálogo ou conteúdo em Production.</strong> A próxima Data Replication sobrescreve. A única exceção aceita é um hotfix emergencial, que também precisa ser refeito em Staging.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Teste de carga em Staging.</strong> Staging não tem cache e faz checagem completa de file system; não representa Production.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>"Onde o merchandiser deve editar?" → <strong>Staging</strong>.</li>
+  <li>"Como popular uma sandbox com dados de Staging?" → <strong>export em Staging + import na sandbox</strong> (site export/import, ou jobs).</li>
+  <li>"O que não é replicado?" → clientes, pedidos, inventário, usuários e roles, job schedules, gift certificates, active data.</li>
+  <li>"Desfazer uma replicação de dados?" → <strong>Undo</strong>, que só vale para a última. Para código, Code Replication Undo, ou reativar a versão anterior.</li>
+  <li>"Onde o Storefront Toolkit não existe?" → <strong>Production</strong>.</li>
+  <li>"Quem monta a página a partir de remote includes?" → o <strong>Web Adapter</strong>.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>Alteração de catálogo ou conteúdo feita em Production "sumiu"</td><td>Data Replication de Staging sobrescreveu</td><td>Refaça em Staging. Confira o histórico em <em>Administration &gt; Replication &gt; Data Replication</em>. Se a última replicação foi o problema, use Undo.</td></tr>
+<tr><td>Custom objects gerados em Production sumiram</td><td>Tipo replicável e tarefa Custom Objects no processo</td><td>Marque o tipo como Not Replicable e reveja as tarefas do processo.</td></tr>
+<tr><td>Replicação falha com o índice de busca</td><td>Índice sendo reconstruído durante a replicação</td><td>Reconstrua antes, espere terminar, desligue a indexação incremental e as reconstruções agendadas, e rode de novo.</td></tr>
+<tr><td>Publishing falha</td><td>As tarefas não batem com as do Transfer, ou um dado transferido não existe mais no destino</td><td>Recrie o Publishing com exatamente as mesmas tarefas; leia os logs de replicação na origem e depois no destino.</td></tr>
+<tr><td>Campanha replicada com cupons quebrados</td><td>Campanhas replicadas antes de coupons e source codes</td><td>Replique as dependências antes ou junto.</td></tr>
+<tr><td>Sandbox "sumiu"</td><td>TTL expirou, ou a sandbox ficou 150 dias sem login</td><td>Recrie com um script de bootstrap (código + dados).</td></tr>
+<tr><td>Código chama o ERP de produção a partir da sandbox</td><td>Endpoint fixo no código</td><td>Mova para Service Credential por instância, ou use mock.</td></tr>
+<tr><td>Página mostra dados antigos em Production, mas não em Staging</td><td>Page cache (Production cacheia; Staging não)</td><td>Confira o TTL do cache da rota e invalide o cache do site em <em>Administration &gt; Sites &gt; Manage Sites &gt; Cache</em>.</td></tr>
+<tr><td>Erro em produção difícil de rastrear</td><td>Falta correlação entre os logs</td><td>Capture o request ID (Request Log fora de Production) e o cookie <code>sid</code>; procure-os no Log Center. Veja o <a class="text-link" href="21-troubleshooting.html">tema 21</a>.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Explicar realm, PIG, SIG, instância, organização e site, e como se relacionam.</li>
+  <li>Dizer o papel de Staging, Development, Production e Sandbox, e como cada uma se comporta em cache, toolkit e dados.</li>
+  <li>Diferenciar Data Replication de Code Replication e os tipos Transfer, Publishing, Transfer &amp; Publishing e Undo.</li>
+  <li>Listar o que não é replicado e a ordem segura de dependências.</li>
+  <li>Saber que sandboxes nascem vazias, consomem créditos e não recebem replicação.</li>
+  <li>Descrever o caminho eCDN → Web Adapter (cache e montagem) → app server (sessão) → banco.</li>
+  <li>Saber o que é compatibility mode e quais recursos de JS chegam em 21.2 e 22.7.</li>
+  <li>Manter endpoints e credenciais fora do código.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Um merchandiser alterou a descrição de 200 produtos diretamente em Production. Dois dias depois as descrições voltaram ao valor antigo. O que aconteceu?</p>
+  <ol class="opts-l"><li>O page cache expirou</li><li>Uma Data Replication de Staging com a tarefa Catalogs sobrescreveu os dados</li><li>A sandbox sincronizou com Production</li><li>O índice de busca foi reconstruído</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> A replicação substitui no destino os dados das tarefas selecionadas. Edições em Production são sobrescritas na próxima replicação de catálogo. Sandboxes não participam da replicação.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Como popular uma On-Demand Sandbox nova com o catálogo e o conteúdo de Staging?</p>
+  <ol class="opts-l"><li>Criar um Data Replication com target = sandbox</li><li>Code Replication com "Transfer &amp; Activation"</li><li>Exportar em Staging (site export ou jobs de export) e importar na sandbox</li><li>Clonar Production</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>c.</strong> A replicação só vale dentro do PIG. Dados chegam às sandboxes por export e import.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual destes itens a Data Replication <em>não</em> leva de Staging para Production?</p>
+  <ol class="opts-l"><li>Price books</li><li>Slot configurations</li><li>Registros de inventário</li><li>Custom object types</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>c.</strong> Inventário não é replicado (assim como clientes, pedidos, usuários, job schedules e gift certificates). O inventário chega a Production por import, normalmente num job alimentado pelo ERP.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Você precisa replicar uma campanha nova que usa coupons e um source code group novos. Qual é a ordem segura?</p>
+  <ol class="opts-l"><li>Campaigns primeiro e depois Coupons e Source Codes</li><li>Coupons e Source Codes antes ou junto de Campaigns</li><li>Tanto faz</li><li>Só Campaigns; os dependentes vão automaticamente</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> As best practices dizem para replicar source codes e coupons antes ou junto das campanhas que os usam, sob risco de corromper dados.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Quem monta uma página composta por remote includes com políticas de cache diferentes?</p>
+  <ol class="opts-l"><li>O application server, num único request</li><li>O Web Adapter, que faz um request por include e junta as partes</li><li>O navegador, com JavaScript</li><li>O eCDN</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Cada remote include é um request adicional ao application server, cacheado separadamente; o Web Adapter monta a página.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Em que instância o Storefront Toolkit fica desabilitado?</p>
+  <ol class="opts-l"><li>Sandbox</li><li>Staging</li><li>Development</li><li>Production</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>d.</strong> A tabela oficial de instâncias diz que o Storefront Toolkit é desabilitado em Production.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Um script precisa usar arrow functions e <code>Map</code>. Qual é o compatibility mode mínimo?</p>
+  <ol class="opts-l"><li>18.10</li><li>19.10</li><li>21.2</li><li>Qualquer um; o Rhino sempre suportou</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>c.</strong> A partir de 21.2 o motor aceita parte do ES6+ (arrow functions, <code>for…of</code>, <code>Map</code>/<code>Set</code>, destructuring). Template literals e shorthand de propriedades chegam em 22.7.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Todos os requests de uma mesma sessão de comprador são atendidos por…</p>
+  <ol class="opts-l"><li>O mesmo web server</li><li>O mesmo application server</li><li>Qualquer application server, porque a sessão fica no banco</li><li>O eCDN</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Web servers são stateless; application servers são session-aware, e a afinidade de sessão leva todos os requests da sessão ao mesmo app server.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<p>Conteúdo conferido nestas fontes (documentação oficial da Salesforce):</p>
+<ul class="refs">
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_demandware_instances.htm&amp;type=5">Instances (Salesforce Help)</a>: tipos de instância, cache, toolkit e papéis.</li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_data_replication_processes.htm&amp;type=5">Data Replication Processes</a>: tipos de processo e o que não é replicado.</li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_data_replication_tasks.htm&amp;type=5">Data Replication Tasks</a>: tarefas globais e de site.</li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c__replication_best_practices.htm&amp;type=5">Replication Best Practices</a></li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_code_replication.htm&amp;type=5">Code Replication</a></li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-developer-sandboxes.html">On-Demand Sandboxes</a>: créditos, TTL e perfis.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-troubleshooting-infrastructure.html">Troubleshooting Infrastructure</a>: web adapter, app servers, afinidade de sessão.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-understanding-remote-includes.html">Understanding Remote Includes</a> e <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-troubleshooting-session-id-request-id.html">Session ID e Request ID</a></li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-compatibility-mode-considerations.html">Compatibility Mode Changes</a>: recursos ES6+ por modo.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-content-cache.html">Content Cache</a>: static cache e page cache.</li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/scriptapi/html/index.html?target=class_dw_system_System.html">Script API: dw.system.System</a></li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

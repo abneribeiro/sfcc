@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>10 · Templates ISML · Guia SFCC</title>
+<meta name="description" content="ISML a fundo: estrutura de templates, expressões, isif, isloop, isset e escopos, isprint com formatação e encoding contra XSS, iscontent, includes locais e remotos, iscomponent, isdecorate e isreplace, custom tags com ismodule, iscache, localização e as boas práticas do SFRA.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="10" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Templates ISML</h1>
+  <p class="lead"><strong>ISML</strong> (Internet Store Markup Language) é a linguagem de templates do B2C Commerce: HTML com tags <code>&lt;is…&gt;</code> e expressões <code>${…}</code>. No SFRA, o template só apresenta: recebe o <code>pdict</code> montado pelo controller e o transforma em HTML, sem lógica de negócio. Este tema cobre todas as tags que você vai usar e as que caem na prova, como reaproveitar código com includes, decorators e custom tags, como evitar XSS com encoding, e como o cache de página se declara no template ou no controller.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>Template</dt><dd>Arquivo <code>.isml</code> em <code>cartridge/templates/&lt;default|locale&gt;/…</code>. Nunca direto em <code>templates/</code>: sempre numa subpasta de locale.</dd>
+  <dt>pdict</dt><dd>O "pipeline dictionary": os dados disponíveis ao template. No SFRA é o <code>viewData</code> passado em <code>res.render(template, data)</code>.</dd>
+  <dt>Expressão</dt><dd><code>${…}</code>: JavaScript avaliado no servidor, inline ou em atributos de tags.</dd>
+  <dt>Local include</dt><dd><code>&lt;isinclude template="…"/&gt;</code>: processa outro template no mesmo request, com o mesmo pdict.</dd>
+  <dt>Remote include</dt><dd><code>&lt;isinclude url="…"/&gt;</code>: outro request a um controller, com cache próprio, montado pelo Web Adapter.</dd>
+  <dt>Decorator</dt><dd>Template-moldura (<code>&lt;isdecorate&gt;</code> + <code>&lt;isreplace/&gt;</code>) que envolve o conteúdo da página.</dd>
+  <dt>Custom tag</dt><dd>Tag própria declarada com <code>&lt;ismodule&gt;</code> e implementada por outro template.</dd>
+  <dt>Encoding</dt><dd>Conversão de caracteres especiais (<code>&lt;</code> → <code>&amp;lt;</code>) para impedir XSS. É o padrão em <code>&lt;isprint&gt;</code>.</dd>
+</dl>
+<p>Pela documentação, as tags e os nomes de atributos não diferenciam maiúsculas de minúsculas, mas os valores dos atributos sim; a recomendação é escrever tudo em minúsculas. Na primeira execução, o template é convertido numa estrutura interna; depois, o processador avalia tags e expressões e envia HTML estático ao navegador.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="expressoes" data-k="cap. 2">
+<h2>Expressões e variáveis disponíveis</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="isml" data-file="expressões típicas no SFRA">
+<iscomment> dados do controller (viewData) </iscomment>
+<h1 class="product-name">${pdict.product.productName}</h1>
+
+<iscomment> APIs dentro da expressão: Resource, URLUtils e dw.* estão disponíveis </iscomment>
+<a href="${URLUtils.url('Cart-Show')}">${Resource.msg('link.view.cart', 'cart', null)}</a>
+<img src="${URLUtils.staticURL('/images/logo.svg')}" alt="${Resource.msg('global.storename', 'common', null)}" />
+
+<iscomment> empty(): true para null, undefined, string vazia, array ou coleção vazia </iscomment>
+<isif condition="${empty(pdict.product.promotions)}"> ... </isif>
+
+<iscomment> o caractere # tem significado especial em ISML; para um href "#" literal: </iscomment>
+<a href="${'#'}">topo</a>
+</script>
+<p>Variáveis de topo disponíveis nos scriptlets e nas expressões: <code>pdict</code>, <code>request</code>, <code>session</code>, <code>customer</code> e <code>out</code> (o PrintWriter da página).</p>
+<aside class="callout" data-kind="warn">
+<p>Dois cuidados da documentação: <code>&lt;/body&gt;</code> é palavra protegida em ISML e não pode aparecer em comentários nem em JavaScript do template (ofusque com <code>"&lt;/bo" + "dy&gt;"</code>); e o <code>#</code> é reservado, o que afeta seletores jQuery inline (use <code>[id='x']</code>).</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fluxo" data-k="cap. 3">
+<h2>Fluxo: isif, isloop, isset, isremove</h2>
+<div class="prose">
+<h3 id="isif">Condicionais</h3>
+<script type="text/plain" class="src" data-lang="isml" data-file="isif / iselseif / iselse">
+<isif condition="${pdict.product.available}">
+    <span class="in-stock">${Resource.msg('label.instock', 'common', null)}</span>
+<iselseif condition="${pdict.product.availability.inStockDate}">
+    <span>${Resource.msgf('label.back.in', 'product', null, pdict.product.availability.inStockDate)}</span>
+<iselse>
+    <span class="not-available">${Resource.msg('label.not.available', 'common', null)}</span>
+</isif>
+</script>
+
+<h3 id="isloop">Loops</h3>
+<p><code>&lt;isloop&gt;</code> aceita <code>items</code> (preferido) ou <code>iterator</code>; <code>var</code> (preferido) ou <code>alias</code>; e <code>status</code>, <code>begin</code>, <code>end</code> (inclusivo) e <code>step</code>. O objeto de status tem <code>count</code> (a partir de 1), <code>index</code>, <code>first</code>, <code>last</code>, <code>odd</code> e <code>even</code>.</p>
+<script type="text/plain" class="src" data-lang="isml" data-file="isloop com status, isnext e isbreak">
+<ul class="mini-cart-items">
+    <isloop items="${pdict.cart.items}" var="lineItem" status="loopState">
+        <isif condition="${lineItem.isBonusProductLineItem}">
+            <isnext/>   <iscomment> pula este item </iscomment>
+        </isif>
+        <li class="${loopState.odd ? 'odd' : 'even'} ${loopState.last ? 'last' : ''}">
+            ${loopState.count}. ${lineItem.productName} × ${lineItem.quantity}
+        </li>
+        <isif condition="${loopState.count >= 5}">
+            <isbreak/>  <iscomment> mostra no máximo 5 </iscomment>
+        </isif>
+    </isloop>
+</ul>
+
+<iscomment> begin/end/step: só os 4 primeiros tiles </iscomment>
+<isloop items="${pdict.productSearch.productIds}" var="product" begin="0" end="3">
+    <isinclude url="${URLUtils.url('Tile-Show', 'pid', product.productID, 'swatches', true)}" />
+</isloop>
+</script>
+
+<h3 id="isset">Variáveis: isset e escopos</h3>
+<table>
+<thead><tr><th>Escopo</th><th>Visível em</th><th>Dura</th></tr></thead>
+<tbody>
+<tr><td><code>page</code></td><td>No template atual (e nos seus includes locais)</td><td>Durante a renderização</td></tr>
+<tr><td><code>request</code></td><td>Em todo o request interno (outros templates do mesmo request)</td><td>O request</td></tr>
+<tr><td><code>session</code></td><td>Em todos os requests da sessão</td><td>A sessão</td></tr>
+</tbody>
+</table>
+<aside class="callout" data-kind="exam">
+<p>Se o atributo <code>scope</code> for omitido, o escopo é <strong>session</strong>. É um erro clássico: uma variável "temporária" acaba persistindo na sessão do comprador. Sempre declare <code>scope="page"</code>. O escopo <code>pdict</code> está depreciado; use <code>request</code>.</p>
+</aside>
+<script type="text/plain" class="src" data-lang="isml" data-file="isset e isremove">
+<isset name="product" value="${pdict.product}" scope="page" />
+<isset name="isQuickView" value="${false}" scope="page" />
+<isinclude template="product/components/productAvailability" />  <iscomment> o include vê "product" </iscomment>
+
+<isremove name="isQuickView" scope="page" />
+</script>
+<p>O guia do SFRA restringe o uso: <em>"isset: only used to set a variable used by isinclude. Don't use complex expressions in the isset."</em> Contas e lógica vão no model.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="saida" data-k="cap. 4">
+<h2>Saída, formatação e encoding</h2>
+<div class="prose">
+<h3 id="isprint">isprint</h3>
+<script type="text/plain" class="src" data-lang="isml" data-file="isprint: formatação">
+<isprint value="${pdict.order.totals.grandTotalMoney}" style="MONEY_LONG" />   <iscomment> R$ 1.234,56 </iscomment>
+<isprint value="${pdict.order.creationDate}" style="DATE_SHORT" timezone="SITE" />
+<isprint value="${pdict.order.creationDate}" formatter="dd/MM/yyyy HH:mm" />
+<isprint value="${2200.1234}" style="INTEGER" />                                <iscomment> 2.200 </iscomment>
+<isprint value="${customer.profile.birthday}" style="DATE_SHORT" timezone="utc" />
+</script>
+<table>
+<thead><tr><th>Tipo</th><th>Styles</th><th>Padrão</th></tr></thead>
+<tbody>
+<tr><td>Money</td><td><code>MONEY_SHORT</code> (sem símbolo), <code>MONEY_LONG</code> (com símbolo)</td><td>MONEY_LONG</td></tr>
+<tr><td>Number</td><td><code>INTEGER</code>, <code>DECIMAL</code> (2 casas)</td><td>DECIMAL</td></tr>
+<tr><td>Quantity</td><td><code>QUANTITY_SHORT</code>, <code>QUANTITY_LONG</code></td><td>QUANTITY_SHORT</td></tr>
+<tr><td>Date</td><td><code>DATE_SHORT</code>, <code>DATE_LONG</code>, <code>DATE_TIME</code></td><td>DATE_SHORT</td></tr>
+</tbody>
+</table>
+<p>O atributo <code>timezone</code> aceita <code>SITE</code> (padrão, definido nas site preferences), <code>INSTANCE</code> ou <code>utc</code> (sem conversão: ideal para datas sem hora, como aniversário).</p>
+
+<h3 id="xss">Encoding e XSS</h3>
+<p><code>&lt;isprint&gt;</code> codifica por padrão (<code>encoding="on"</code>). Para contextos que não são HTML comum, há encoders de contexto, mapeados para a classe <code>SecureEncoder</code>:</p>
+<table>
+<thead><tr><th>Contexto do dado</th><th><code>encoding=</code></th></tr></thead>
+<tbody>
+<tr><td>Texto no corpo do HTML</td><td><code>htmlcontent</code></td></tr>
+<tr><td>Atributo HTML entre aspas duplas / simples / sem aspas</td><td><code>htmldoublequote</code> / <code>htmlsinglequote</code> / <code>htmlunquote</code></td></tr>
+<tr><td>String JavaScript num bloco <code>&lt;script&gt;</code></td><td><code>jsblock</code></td></tr>
+<tr><td>JavaScript dentro de atributo (<code>onclick</code>)</td><td><code>jsattribute</code></td></tr>
+<tr><td>Valor dentro de JSON</td><td><code>jsonvalue</code></td></tr>
+<tr><td>Parte de URL</td><td><code>uricomponent</code> / <code>uristrict</code></td></tr>
+<tr><td>XML</td><td><code>xmlcontent</code>, <code>xmldoublequote</code>, <code>xmlsinglequote</code>, <code>xmlcomment</code></td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="src" data-lang="isml" data-file="encoding no contexto certo">
+<iscomment> o termo buscado veio da URL: dado não confiável </iscomment>
+<p>${Resource.msg('label.results.for', 'search', null)} <isprint value="${pdict.productSearch.searchKeywords}" encoding="htmlcontent" /></p>
+
+<input type="text" value="<isprint value="${pdict.productSearch.searchKeywords}" encoding="htmldoublequote" />" />
+
+<\script>
+    var searchTerm = "<isprint value="${pdict.productSearch.searchKeywords}" encoding="jsblock" />";
+<\/script>
+
+<iscomment> encoding="off" SÓ para markup confiável, como o corpo de um content asset editado no BM </iscomment>
+<isprint value="${pdict.content.body}" encoding="off" />
+</script>
+<aside class="callout" data-kind="warn">
+<p>Armadilha documentada: <code>${…}</code> é codificado automaticamente quando o template tem <code>&lt;iscontent type="text/html"&gt;</code>. Num template <strong>incluído</strong> sem <code>&lt;iscontent&gt;</code>, o tipo assumido é <code>text/plain</code> e <strong>não há encoding HTML</strong>, o que abre espaço para XSS. A documentação recomenda definir o content type ou usar <code>&lt;isprint value="${…}"/&gt;</code> para dados não confiáveis.</p>
+</aside>
+
+<h3 id="iscontent">iscontent</h3>
+<p>Define o tipo MIME, o charset, o encoding e o <code>compact</code> (remoção de espaços) da saída. Deve ser a <strong>primeira</strong> tag do template. O padrão é <code>text/html</code>, UTF-8. O <code>compact</code> não se propaga para includes: cada template que precisa dele declara o seu.</p>
+<script type="text/plain" class="src" data-lang="isml" data-file="templates/default/feeds/googleProducts.isml">
+<iscontent type="application/xml" charset="UTF-8" encoding="xml" compact="true" />
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+    <isloop items="${pdict.items}" var="item">
+        <item><title><isprint value="${item.name}" encoding="xmlcontent" /></title></item>
+    </isloop>
+</rss>
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="includes" data-k="cap. 5">
+<h2>Reutilização: includes, iscomponent e decorators</h2>
+<div class="prose">
+<h3 id="include-local-remoto">isinclude: local × remoto</h3>
+<table>
+<thead><tr><th></th><th><code>template="…"</code> (local)</th><th><code>url="…"</code> (remoto)</th></tr></thead>
+<tbody>
+<tr><td>O que inclui</td><td>Outro template</td><td>A resposta de outra rota (controller)</td></tr>
+<tr><td>Processado por</td><td>Application server, no mesmo request</td><td>Web Adapter, que faz outro request</td></tr>
+<tr><td>Acesso ao pdict e às variáveis da página</td><td>Sim (inclusive variáveis de loop)</td><td>Não; passe tudo por parâmetro de URL</td></tr>
+<tr><td>Cache</td><td>O da página (e um <code>&lt;iscache&gt;</code> dentro dele afeta a página toda)</td><td>Próprio</td></tr>
+<tr><td>Profundidade máxima</td><td>Limitada (a documentação cita 20)</td><td>16</td></tr>
+<tr><td>Observações</td><td>Pode ser expressão: <code>template="${pdict.tpl}"</code></td><td>Não aceita SEO URLs; use <code>URLUtils.url</code></td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="src" data-lang="isml" data-file="os dois tipos lado a lado">
+<iscomment> local: pedaço da PDP que precisa do mesmo "product" </iscomment>
+<isinclude template="product/components/pricing/main" />
+
+<iscomment> remoto: pedaço com cache diferente (ou nenhum) dentro de uma página cacheada </iscomment>
+<isinclude url="${URLUtils.url('Cart-MiniCart')}" />
+<isinclude url="${URLUtils.url('Promo-Banner', 'cgid', pdict.category ? pdict.category.id : '')}" />
+
+<iscomment> sf-toolkit="off": suprime o marcador dwMarker do Storefront Toolkit (só em includes locais) </iscomment>
+<isinclude template="/common/scripts" sf-toolkit="off" />
+</script>
+
+<h3 id="iscomponent">iscomponent</h3>
+<p>Funciona como um remote include, mas declara a rota e os parâmetros como atributos. Também tem cache próprio e não aceita SEO URLs.</p>
+<script type="text/plain" class="src" data-lang="isml" data-file="iscomponent">
+<iscomponent pipeline="Tile-Show" pid="${product.id}" swatches="true" ratings="true" />
+</script>
+
+<h3 id="isdecorate">isdecorate e isreplace</h3>
+<p>O template de conteúdo envolve-se em <code>&lt;isdecorate template="…"&gt;</code>; o template decorador marca com <code>&lt;isreplace/&gt;</code> onde o conteúdo entra. Decorators podem ser aninhados. Se o decorador não tiver <code>&lt;isreplace/&gt;</code>, o conteúdo some; se tiver vários, o conteúdo aparece em cada um. O SFRA tem só dois decoradores de página: <code>common/layout/page.isml</code> (com navegação) e <code>common/layout/checkout.isml</code> (sem navegação, o que, segundo a documentação, ajuda a reduzir o abandono no checkout).</p>
+<script type="text/plain" class="src" data-lang="isml" data-file="templates/default/common/layout/landing.isml (decorador próprio)">
+<isdecorate template="common/layout/page">
+    <div class="landing-hero">
+        <isslot id="landing-hero-banner" description="Banner das landing pages" context="global" />
+    </div>
+    <div class="container landing-body">
+        <isreplace/>   <iscomment> conteúdo de quem usa este decorador </iscomment>
+    </div>
+</isdecorate>
+</script>
+<script type="text/plain" class="src" data-lang="isml" data-file="templates/default/content/blackFriday.isml (usa o decorador)">
+<isdecorate template="common/layout/landing">
+    <h1>${Resource.msg('heading.blackfriday', 'content', null)}</h1>
+    <iscontentasset aid="black-friday-rules" />
+</isdecorate>
+</script>
+<p>O <code>&lt;isslot&gt;</code> está no <a class="text-link" href="11-slots-page-designer.html">tema 11</a>.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="custom-tags" data-k="cap. 6">
+<h2>Custom tags com ismodule</h2>
+<div class="prose">
+<p>Uma custom tag é um template incluído que recebe atributos. Declaração: <code>&lt;ismodule template="…" name="nome" attribute="a" attribute="b"/&gt;</code>. Uso: <code>&lt;isnome a="…"/&gt;</code> (o prefixo <code>is</code> é acrescentado). A declaração precisa vir antes do primeiro uso; se a mesma tag for declarada várias vezes, vale a última. Os atributos são sempre opcionais e chegam como variáveis com o mesmo nome (em minúsculas) no template da tag.</p>
+<p>O SFRA usa custom tags principalmente para content assets: <code>components/modules.isml</code> declara <code>&lt;iscontentasset aid="…"/&gt;</code>, e o <code>page.isml</code> inclui esse arquivo no topo.</p>
+<script type="text/plain" class="src" data-lang="isml" data-file="app_storefront_base/cartridge/templates/default/components/modules.isml">
+<ismodule template="/components/content/contentAsset"
+    name="contentasset"
+    attribute="aid"
+/>
+</script>
+
+<h3 id="tag-propria">Criando uma tag: selo de desconto</h3>
+<script type="text/plain" class="src" data-lang="isml" data-file="app_custom_acme/cartridge/templates/default/components/modules.isml (sobrescrita do base + tag nova)">
+<ismodule template="/components/content/contentAsset" name="contentasset" attribute="aid" />
+
+<ismodule template="/components/acme/discountBadge"
+    name="discountbadge"
+    attribute="list"
+    attribute="sales"
+/>
+</script>
+<script type="text/plain" class="src" data-lang="isml" data-file="app_custom_acme/cartridge/templates/default/components/acme/discountBadge.isml">
+<iscomment>
+    Custom tag <isdiscountbadge list="${...}" sales="${...}"/>
+    Recebe dois números (valores de lista e de venda) e mostra "-NN%" quando há desconto real.
+</iscomment>
+<isif condition="${list && sales && list > sales}">
+    <span class="badge badge-danger discount-badge">-${Math.round((1 - sales / list) * 100)}%</span>
+</isif>
+</script>
+<script type="text/plain" class="src" data-lang="isml" data-file="uso num template de tile">
+<isdiscountbadge list="${product.price.list ? product.price.list.value : null}" sales="${product.price.sales.value}" />
+</script>
+<aside class="callout" data-kind="note">
+<p>O guia de customização do SFRA recomenda <code>ismodule</code> para content assets. Para componentes reutilizáveis em geral, um <code>&lt;isinclude template&gt;</code> com <code>&lt;isset scope="page"&gt;</code> é o padrão mais usado no base. As duas formas funcionam; a prova costuma cobrar a sintaxe do <code>ismodule</code> (o nome sem o prefixo <code>is</code>).</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="cache-tags" data-k="cap. 7">
+<h2>Cache, cookies, redirect e status</h2>
+<div class="prose">
+<h3 id="iscache">iscache</h3>
+<script type="text/plain" class="src" data-lang="isml" data-file="sintaxe atual">
+<iscache type="relative" hour="24" />                               <iscomment> expira em 24h </iscomment>
+<iscache type="daily" hour="6" minute="30" />                       <iscomment> expira todo dia às 06:30 GMT </iscomment>
+<iscache type="relative" minute="30" varyby="price_promotion" />    <iscomment> 30 min, versões por preço e promoção </iscomment>
+<iscache hour="2" varyby="price_promotion" if="${!searchModel.isPersonalizedSort()}" />
+</script>
+<ul>
+  <li><code>type</code> ou <code>varyby</code> é obrigatório; sem nenhum dos dois, exceção.</li>
+  <li><strong><code>status="off"</code> está depreciado</strong>: para não cachear, <strong>omita</strong> o <code>&lt;iscache&gt;</code>, ou use <code>if</code> para desligar o cache por condição.</li>
+  <li>Com vários <code>&lt;iscache&gt;</code> (inclusive em includes locais), vence o mais restritivo (sem cache, ou o menor tempo). Se qualquer um tiver <code>varyby</code>, a página inteira é personalizada.</li>
+  <li><code>varyby="price_promotion"</code> cria variações por conjunto de promoções, sorting rules, price books e grupos de A/B test. Use só quando a página realmente varia, porque fragmenta o cache.</li>
+  <li>Se um <code>&lt;isscript&gt;</code> lançar exceção (ou houver erro de banco), o cache da página é limitado a 5 minutos.</li>
+  <li>O <code>&lt;iscache&gt;</code> só tem efeito com o page cache ligado no BM.</li>
+</ul>
+<aside class="callout" data-kind="best">
+<p>No SFRA, o cache se define no <strong>controller</strong>, com os middlewares de <code>scripts/middleware/cache.js</code> (eles chamam <code>response.setExpires</code> e <code>setVaryBy</code>). A documentação de Content Cache diz explicitamente: <em>"For SFRA implementations, use middleware for caching configuration."</em></p>
+</aside>
+
+<h3 id="outras-tags">iscookie, isredirect, isstatus</h3>
+<p>Existem (<code>&lt;iscookie name value maxAge secure…/&gt;</code>, <code>&lt;isredirect location permanent/&gt;</code>, <code>&lt;isstatus value="404"/&gt;</code>), mas o guia do SFRA recomenda fazer o equivalente <strong>no controller</strong> (<code>res.redirect</code>, <code>res.setStatusCode</code>, cookies via <code>response.addHttpCookie</code>). Template não decide fluxo.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="isscript" data-k="cap. 8">
+<h2>isscript e as regras do SFRA para tags</h2>
+<div class="prose">
+<p><code>&lt;isscript&gt;</code> executa JavaScript no servidor dentro do template; vários blocos compartilham o mesmo contexto. É o lugar mais fácil de esconder lógica de negócio na view, e por isso o SFRA o restringe. A lista oficial (<em>Best Practices with ISML</em>, no guia <em>Customize SFRA</em>):</p>
+<table>
+<thead><tr><th>Tag</th><th>Uso recomendado no SFRA</th></tr></thead>
+<tbody>
+<tr><td><code>iscache</code></td><td>Prefira definir no controller</td></tr>
+<tr><td><code>isset</code></td><td>Só para variáveis usadas por <code>isinclude</code>; sem expressões complexas</td></tr>
+<tr><td><code>isscript</code></td><td>Só para adicionar JS e CSS de cliente com o módulo <code>assets</code></td></tr>
+<tr><td><code>ismodule</code></td><td>Só para content assets</td></tr>
+<tr><td><code>iscontent</code>, <code>iscookie</code>, <code>isredirect</code>, <code>isstatus</code></td><td>Defina no controller</td></tr>
+<tr><td><code>isobject</code></td><td>Envolver produtos para analytics e Storefront Toolkit</td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="src" data-lang="isml" data-file="o único isscript esperado num template SFRA">
+<isdecorate template="common/layout/page">
+    <isscript>
+        var assets = require('*/cartridge/scripts/assets');
+        assets.addJs('/js/loyalty.js');
+        assets.addCss('/css/account/loyalty.css');
+    </isscript>
+    ...
+</isdecorate>
+</script>
+<aside class="callout" data-kind="anti">
+<p>Chamar <code>ProductMgr</code>, <code>BasketMgr</code> ou um serviço dentro do ISML. Além de misturar camadas, acontece dentro da renderização: um erro ali limita o cache da página a 5 minutos e não pode ser estendido por outros cartridges.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="i18n" data-k="cap. 9">
+<h2>Localização nos templates</h2>
+<div class="prose">
+<p>O SFRA usa <strong>um único conjunto de templates</strong> para todos os locales; os textos vêm de <em>resource bundles</em> (<code>templates/resources/*.properties</code>) traduzidos por locale (<code>checkout_pt_BR.properties</code>, <code>checkout_fr.properties</code>…).</p>
+<script type="text/plain" class="src" data-lang="properties" data-file="templates/resources/account_pt_BR.properties">
+label.loyalty.title=Programa de pontos
+label.loyalty.points=Você tem {0} pontos
+</script>
+<script type="text/plain" class="src" data-lang="isml" data-file="uso">
+<h2>${Resource.msg('label.loyalty.title', 'account', null)}</h2>
+<p>${Resource.msgf('label.loyalty.points', 'account', null, pdict.points)}</p>
+</script>
+<ul>
+  <li>O terceiro argumento é o texto padrão, usado se a chave não existir.</li>
+  <li>Templates específicos de um locale podem ficar em <code>templates/&lt;locale&gt;/…</code>: a busca tenta a pasta do locale e depois <code>default</code>. Prefira resource bundles a templates duplicados.</li>
+  <li>Datas e valores: <code>&lt;isprint&gt;</code> já formata conforme o locale e o fuso do site.</li>
+</ul>
+<p>O tema de localização (locales do site, URLs, fallback, atributos localizáveis) está no <a class="text-link" href="14-business-manager.html#locales">tema 14</a>.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong><code>&lt;isset&gt;</code> sem <code>scope</code></strong>: a variável vai parar na sessão.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong><code>encoding="off"</code> em dado digitado pelo usuário</strong> (busca, nome, endereço): XSS.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong><code>&lt;iscache&gt;</code> num include local de uma página com dados da sessão</strong>: o include afeta o cache da página inteira. Dados da sessão vão em remote include sem cache.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Usar <code>&lt;iscache status="off"&gt;</code></strong>: depreciado, gera mensagens no log de deprecação, e depois dele a página não pode reativar o cache. Omita o tag.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>Remote include = <code>url</code>; local = <code>template</code>. Só o remoto tem cache próprio.</li>
+  <li>Custom tag: <code>&lt;ismodule name="x"&gt;</code> → usa-se <code>&lt;isx&gt;</code>.</li>
+  <li><code>&lt;isloop&gt;</code>: status tem <code>count</code> (começa em 1) e <code>index</code>; <code>end</code> é inclusivo.</li>
+  <li>Escopo padrão do <code>isset</code> = <strong>session</strong>.</li>
+  <li>Decorator: <code>&lt;isdecorate template&gt;</code> no conteúdo, <code>&lt;isreplace/&gt;</code> no decorador.</li>
+  <li><code>&lt;iscomment&gt;</code> é removido da saída; comentários HTML vão ao navegador (não ponha informação sensível neles).</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td><code>Requested template not found</code></td><td>Caminho errado; template fora de <code>templates/default</code>; cartridge fora do path</td><td>O caminho é relativo a <code>templates/&lt;locale&gt;</code>, sem extensão.</td></tr>
+<tr><td>HTML aparece "escapado" (<code>&amp;lt;div&amp;gt;</code>)</td><td>Markup confiável impresso com encoding</td><td>Para markup do BM (content asset): <code>&lt;isprint value encoding="off"/&gt;</code>.</td></tr>
+<tr><td>Texto do usuário executa script na página</td><td>Sem encoding (template incluído sem <code>iscontent</code>, ou <code>encoding="off"</code>)</td><td><code>&lt;isprint&gt;</code> com o encoder do contexto.</td></tr>
+<tr><td>Variável "vaza" entre páginas ou compradores</td><td><code>isset</code> sem escopo (sessão)</td><td>Use <code>scope="page"</code>.</td></tr>
+<tr><td>Página inteira deixou de ser cacheada</td><td>Um include local tem <code>iscache</code> mais restritivo, ou <code>status="off"</code></td><td>Procure <code>iscache</code> nos includes; use remote include para a parte dinâmica.</td></tr>
+<tr><td>Página com erro fica pouco tempo em cache</td><td>Exceção em <code>&lt;isscript&gt;</code> limita o cache a 5 minutos</td><td>Corrija o erro no log; tire a lógica do template.</td></tr>
+<tr><td>Template certo, mas texto antigo</td><td>Page cache</td><td>Invalide o cache ou desligue-o na sandbox.</td></tr>
+<tr><td>Qual template gera este pedaço da página?</td><td>—</td><td>Storefront Toolkit, modo de informações de template (fora de Production).</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Onde ficam os templates e como o caminho é resolvido (locale, cartridge path).</li>
+  <li>Usar expressões, <code>empty()</code>, Resource e URLUtils dentro de templates.</li>
+  <li><code>isif</code>/<code>iselseif</code>/<code>iselse</code>, <code>isloop</code> com status e <code>isbreak</code>/<code>isnext</code>.</li>
+  <li><code>isset</code> e os escopos (padrão: session), <code>isremove</code>.</li>
+  <li><code>isprint</code>: styles, formatter, timezone, encoders de contexto.</li>
+  <li><code>iscontent</code> e a armadilha de encoding nos includes.</li>
+  <li>Include local × remoto × <code>iscomponent</code>; <code>isdecorate</code>/<code>isreplace</code>.</li>
+  <li>Criar custom tags com <code>ismodule</code>.</li>
+  <li><code>iscache</code> atual (type, varyby, if; <code>status="off"</code> depreciado) e cache via middleware no SFRA.</li>
+  <li>As regras do SFRA para cada tag.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Uma página de categoria cacheada por 24h precisa mostrar o nome do comprador logado no header. Como fazer?</p>
+  <ol class="opts-l"><li><code>&lt;isinclude template="header/user"/&gt;</code></li><li><code>&lt;isinclude url="${URLUtils.url('Account-Header')}"/&gt;</code>, uma rota sem cache</li><li><code>&lt;iscache status="off"/&gt;</code> na página</li><li><code>&lt;isset scope="session"&gt;</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O remote include tem cache próprio; a página continua cacheada e o fragmento pessoal não.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual é o escopo de <code>&lt;isset name="x" value="${1}"/&gt;</code>?</p>
+  <ol class="opts-l"><li>page</li><li>request</li><li>session</li><li>pdict</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>c.</strong> Sem <code>scope</code>, o padrão é session.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Com <code>&lt;ismodule template="util/badge" name="promobadge" attribute="type"/&gt;</code>, como se usa a tag?</p>
+  <ol class="opts-l"><li><code>&lt;promobadge type="x"/&gt;</code></li><li><code>&lt;ispromobadge type="x"/&gt;</code></li><li><code>&lt;ismodule-promobadge/&gt;</code></li><li><code>&lt;isinclude module="promobadge"/&gt;</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> A tag é declarada sem o prefixo e usada com <code>is</code>.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Como imprimir um termo de busca dentro de um atributo <code>value="…"</code> com segurança?</p>
+  <ol class="opts-l"><li><code>${term}</code></li><li><code>&lt;isprint value="${term}" encoding="htmldoublequote"/&gt;</code></li><li><code>&lt;isprint value="${term}" encoding="off"/&gt;</code></li><li><code>&lt;isscript&gt;out.print(term)&lt;/isscript&gt;</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O encoder de contexto para atributo entre aspas duplas.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Um template tem <code>&lt;iscache type="relative" hour="24"/&gt;</code> e inclui localmente outro com <code>&lt;iscache type="relative" minute="30"/&gt;</code>. Qual é o cache da página?</p>
+  <ol class="opts-l"><li>24 horas</li><li>30 minutos</li><li>Sem cache</li><li>24h para a página, 30 min para o include</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Includes locais fazem parte da mesma página; vence o mais restritivo.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Num loop, como mostrar a numeração 1, 2, 3…?</p>
+  <ol class="opts-l"><li><code>${status.index}</code></li><li><code>${status.count}</code></li><li><code>${status.position}</code></li><li><code>${loop.i}</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> <code>count</code> começa em 1; <code>index</code> é o índice na coleção.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Segundo as boas práticas do SFRA, para que serve <code>&lt;isscript&gt;</code> num template?</p>
+  <ol class="opts-l"><li>Buscar produtos</li><li>Só adicionar JS e CSS de cliente pelo módulo <code>assets</code></li><li>Calcular impostos</li><li>Definir cookies</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Lógica fica em controllers, models e helpers.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Como desligar o cache de uma página hoje, segundo a documentação do <code>&lt;iscache&gt;</code>?</p>
+  <ol class="opts-l"><li><code>&lt;iscache status="off"/&gt;</code></li><li>Omitir o <code>&lt;iscache&gt;</code> (ou usar <code>if</code> para desligar por condição)</li><li><code>&lt;iscache hour="0"/&gt;</code></li><li><code>&lt;isstatus value="200"/&gt;</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> <code>status="off"</code> está depreciado.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-isml.html">ISML</a>: tabela de todas as tags.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-working-with-templates.html">Templates</a>: estrutura, boas práticas, encoding em includes, cache.</li>
+  <li>Tags: <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-isprint.html">isprint</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-isinclude.html">isinclude</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-iscache.html">iscache</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-isset.html">isset</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-isloop.html">isloop</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-ismodule.html">ismodule</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-iscontent.html">iscontent</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-isdecorate.html">isdecorate</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-iscomponent.html">iscomponent</a>.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-isml-expressions.html">ISML Expressions</a></li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-customizing-sfra.html">Customize SFRA</a>: Best Practices with ISML, decorators, override de templates.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-localization.html">Localization</a>: resource bundles.</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

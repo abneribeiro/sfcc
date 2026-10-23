@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>21 · Troubleshooting e otimização · Guia SFCC</title>
+<meta name="description" content="Diagnóstico no B2C Commerce: método de troubleshooting, tipos de log e retenção, Custom Log Settings, dw.system.Logger, Log Center, Request Log e Storefront Toolkit, Pipeline Profiler e Code Profiler, Quota Status e deprecation, script debugger, b2c logs e a tabela consolidada de sintomas, causas e ações.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="21" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Troubleshooting e otimização</h1>
+  <p class="lead">Saber onde olhar é metade do trabalho. O B2C Commerce dá ao desenvolvedor um conjunto fixo de instrumentos: <strong>arquivos de log</strong> por tipo e nível, <strong>Log Center</strong> no realm, o <strong>Storefront Toolkit</strong> (com Request Log e Cache Info), os <strong>profilers</strong>, o <strong>Quota Status</strong> e o <strong>script debugger</strong>. Este tema organiza esses instrumentos num método e termina com a tabela consolidada de sintomas, que reúne os casos de debug de todos os temas.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>System log</dt><dd>Logs da plataforma (<code>error</code>, <code>warn</code>, <code>info</code>, <code>fatal</code>, <code>api</code>, <code>quota</code>, <code>deprecation</code>, <code>jobs</code>, <code>staging</code>, <code>sysevent</code>…). Ficam sempre ativos e não são configuráveis pelo cliente.</dd>
+  <dt>Custom log</dt><dd>O que o seu código grava com <code>dw.system.Logger</code>: <code>customerror</code>, <code>customwarn</code>, <code>custominfo</code>, <code>customdebug</code>, <code>customfatal</code>, ou arquivos nomeados <code>custom-&lt;prefixo&gt;-…</code>.</dd>
+  <dt>Categoria de log</dt><dd>Segundo argumento de <code>Logger.getLogger(prefixo, categoria)</code>. Os níveis são ligados por categoria em <em>Custom Log Settings</em>.</dd>
+  <dt>Log Center</dt><dd>Aplicação do realm que agrega logs de todas as instâncias (PIG e SIG), com busca, dashboard, alertas, streaming e traces.</dd>
+  <dt>Storefront Toolkit</dt><dd>Ferramentas sobre o storefront : Page Info, Content Info, Search Info, Cache Info, Request Log e Preview Settings.</dd>
+  <dt>Quota</dt><dd>Limite da plataforma, com ação <code>log_only</code>, <code>warn</code> ou <code>error</code> (enforced: lança exceção e interrompe a operação).</dd>
+</dl>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="metodo" data-k="cap. 2">
+<h2>Um método de troubleshooting</h2>
+<div class="prose">
+<script type="text/plain" class="mmd" data-caption="do sintoma à causa">
+flowchart TB
+  S["Sintoma"] --> R{"Reproduz?<br/>onde? (sandbox, STG, PRD)"}
+  R -->|"sim, local"| D["Sandbox: Request Log, debugger,<br/>Code Profiler (modo dev)"]
+  R -->|"só STG/PRD"| L["Log Center + error/custom logs,<br/>Pipeline/Code Profiler (modo produção)"]
+  D --> C{"Mudou algo?"}
+  L --> C
+  C -->|"deploy / ativação"| CV["Comparar code versions,<br/>rollback se necessário"]
+  C -->|"replicação / import / cache"| DT["Data/Code Replication history,<br/>logs de import, invalidação de cache"]
+  C -->|"tráfego / terceiros"| TP["Service Status, Quota Status,<br/>Reports & Dashboards"]
+  CV --> F["Corrigir + teste + monitorar"]
+  DT --> F
+  TP --> F
+</script>
+<ol class="steps">
+  <li><strong>Caracterize</strong>: é reproduzível ou intermitente? Em qual instância, site, locale e grupo de cliente? Qual URL e controller? Quando começou?</li>
+  <li><strong>Correlacione com mudanças</strong>: ativação de code version, replicação de dados ou código, import grande, edição manual em produção, limpeza de cache, mudança de preferência.</li>
+  <li><strong>Leia os sinais certos</strong>: erro com stack trace (error log e Log Center), lentidão (profilers e Service Status), dado errado (Storefront Toolkit, BM, replicação), quota (Quota Status e quota log).</li>
+  <li><strong>Isole</strong>: reproduza na sandbox com os mesmos dados (import do site) e a mesma code version. Use o debugger. Desative cartridges do path um a um.</li>
+  <li><strong>Corrija e previna</strong>: teste unitário do caso, log útil, alerta no Log Center.</li>
+  <li><strong>Antes de abrir um ticket</strong>: passos para reproduzir, horário (GMT), arquivo HAR e o <code>dwsid</code> da sessão.</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="logs" data-k="cap. 3">
+<h2>Arquivos de log</h2>
+<div class="prose">
+<p>Acesso: <em>Administration &gt; Site Development &gt; Development Setup &gt; Log files</em> (WebDAV <code>/on/demandware.servlet/webdav/Sites/Logs</code>), o Log Center, ou o b2c CLI.</p>
+<table>
+<thead><tr><th>Arquivo</th><th>Conteúdo</th></tr></thead>
+<tbody>
+<tr><td><code>error-*</code>, <code>fatal-*</code></td><td>Erros e exceções não tratadas em scripts, templates e plataforma</td></tr>
+<tr><td><code>warn-*</code></td><td>Locks, avisos de slot, servlets</td></tr>
+<tr><td><code>customerror</code>, <code>customwarn</code>, <code>custominfo</code>, <code>customdebug</code>, <code>customfatal</code></td><td>Saída de <code>Logger.*</code> sem prefixo de arquivo</td></tr>
+<tr><td><code>custom-&lt;prefixo&gt;-&lt;host&gt;-appserver-&lt;data&gt;.log</code></td><td>Saída de <code>Logger.getLogger('prefixo', 'categoria')</code></td></tr>
+<tr><td><code>service-&lt;prefixo&gt;-…</code></td><td>Service Framework: <em>head</em>, <em>comm</em>, <em>log</em> (<a class="text-link" href="19-integracoes.html#logs-servico">tema 19</a>)</td></tr>
+<tr><td><code>quota-*</code></td><td>Quotas de API e de objeto (avisos e violações)</td></tr>
+<tr><td><code>deprecation-*</code></td><td>Uso de APIs deprecated (ex.: <code>&lt;iscache status="off"/&gt;</code>)</td></tr>
+<tr><td><code>api-*</code></td><td>Problemas de API (pipeline dictionary, templates)</td></tr>
+<tr><td><code>jobs-*</code> e <code>jobs/</code></td><td>Status do job manager e logs por execução</td></tr>
+<tr><td><code>staging-*</code></td><td>Replicação de dados e de código</td></tr>
+<tr><td><code>sysevent-*</code></td><td>Registro de app server, ativação de code version, cartridges</td></tr>
+<tr><td>Impex <code>log/</code></td><td>Logs de import/export e validação (catálogo, preço, estoque…)</td></tr>
+<tr><td><code>Securitylogs/</code></td><td>Logins no BM e eventos de segurança (retidos por 90 dias)</td></tr>
+</tbody>
+</table>
+<ul>
+  <li><strong>Retenção</strong> (Production e Staging): 30 dias, e 90 dias para os logs de segurança. Depois de 3 dias os arquivos vão para <code>log_archive</code> em gzip. Em sandboxes e Development não há política de retenção.</li>
+  <li><strong>Limite</strong>: cada app server grava até <strong>10 MB por dia</strong> em cada arquivo custom. Ao atingir o limite, aparece a linha <code>Maximum log file size per day reached, logging suspended.</code> e a gravação para até 00:00 GMT. Logs de sistema não têm esse limite.</li>
+  <li><strong>Supressão</strong>: uma mensagem de erro ou aviso repetida mais de 10 vezes em 3 minutos é suprimida por mais 3 minutos.</li>
+  <li><strong>Debug</strong> fica sempre desligado em produção. Fora dela, ele vai para a memória (alimenta o Request Log), não para arquivo.</li>
+  <li>Até 200 nomes de arquivo de log diferentes por dia e por app server (limite rígido).</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="logger" data-k="cap. 4">
+<h2>Logging no código com dw.system.Logger</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="js" data-file="int_acme_oms/cartridge/scripts/helpers/orderSync.js">
+'use strict';
+
+var Logger = require('dw/system/Logger');
+// arquivo custom-oms-*.log; categoria "orderSync" (ligue níveis por categoria no BM)
+var log = Logger.getLogger('oms', 'orderSync');
+
+function sync(order) {
+    log.info('Sincronizando pedido {0} ({1} itens)', order.orderNo, order.productLineItems.size());
+
+    if (log.isDebugEnabled()) {
+        // só monta o objeto caro se o debug estiver ligado
+        log.debug('Payload: {0}', JSON.stringify(buildSafePayload(order)));
+    }
+
+    try {
+        var result = require('*/cartridge/scripts/services/omsService').send(order);
+        if (!result.ok) {
+            log.warn('OMS recusou {0}: status={1} motivo={2}', order.orderNo, result.status, result.unavailableReason || result.errorMessage);
+        }
+        return result.ok;
+    } catch (e) {
+        // inclua contexto técnico; nunca dados de cartão, senha ou PII completa
+        log.error('Falha ao sincronizar {0}: {1}\n{2}', order.orderNo, e.message, e.stack);
+        return false;
+    }
+}
+
+function buildSafePayload(order) {
+    return { orderNo: order.orderNo, total: order.totalGrossPrice.value, currency: order.currencyCode };
+}
+
+module.exports = { sync: sync };
+</script>
+<ul>
+  <li><strong>Prefixo de arquivo</strong>: 3 a 25 caracteres <code>a-z A-Z 0-9 - _</code>, sem começar nem terminar com <code>-</code> ou <code>_</code>. Use um por integração ou área: ajuda a encontrar e divide o limite de 10 MB.</li>
+  <li><strong>Placeholders</strong> <code>{0}</code>, <code>{1}</code>: evitam concatenar strings quando o nível está desligado.</li>
+  <li><strong>Atalhos estáticos</strong>: <code>Logger.error(…)</code>, <code>Logger.warn(…)</code> etc. gravam no log custom raiz.</li>
+  <li><strong><code>Logger.getNDC()</code></strong>: contexto aninhado (ex.: o número do pedido) acrescentado a todas as mensagens da thread.</li>
+</ul>
+<h3 id="custom-log-settings">Custom Log Settings (BM)</h3>
+<p><em>Administration &gt; Operations &gt; Custom Log Settings</em>:</p>
+<ul>
+  <li><strong>Níveis por categoria</strong>: a categoria precisa bater com a do <code>getLogger</code> (hierarquia separada por ponto). Por padrão, só WARN, ERROR e FATAL vão para arquivo, e info e debug ficam desligados.</li>
+  <li><strong>Log to File</strong> por nível; <strong>Receive Email</strong> para FATAL.</li>
+  <li>Os níveis de log também podem ser ajustados dinamicamente na aba Config do Log Center.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="log-center" data-k="cap. 5">
+<h2>Log Center e b2c logs</h2>
+<div class="prose">
+<ul>
+  <li><strong>Acesso</strong>: pelo BM em <em>Development Setup &gt; Log Center</em>, ou direto no navegador. Mostra os logs do realm inteiro (PIG e SIG).</li>
+  <li><strong>Busca</strong> por período, severidade, tipo, texto e LCQL. Exemplo: buscar <code>HookCircuitBreaker</code> e abrir o <em>Stack Trace UUID</em> (<a class="text-link" href="17-ocapi.html#regras-hooks">tema 17</a>).</li>
+  <li><strong>Dashboard</strong>: tráfego, requisições mais pesadas, stack traces recorrentes. <strong>Alertas</strong> por e-mail, Slack, Teams ou PagerDuty. Também há streaming de logs, detecção de anomalias e traces (beta) ponta a ponta.</li>
+  <li>Mensagens com mais de ~7.000 caracteres são truncadas. Uma mensagem pode estar no Log Center e não no arquivo, se o arquivo já tiver atingido 10 MB.</li>
+</ul>
+<script type="text/plain" class="src" data-lang="bash" data-file="b2c CLI (B2C Developer Tooling)">
+b2c logs list                                         # arquivos disponíveis
+b2c logs tail --level ERROR --level FATAL              # acompanhar em tempo real
+b2c logs tail --filter custominfo
+b2c logs get --since 1h --level ERROR --search "PaymentProcessor" --json
+b2c logs get --filter custom- --count 50
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="toolkit" data-k="cap. 6">
+<h2>Storefront Toolkit e Request Log</h2>
+<div class="prose">
+<p>No BM: <em>Merchant Tools &gt; selecione o site &gt; Toolkit</em> (ou o link do site em Site Development). O storefront abre com os ícones do Toolkit.</p>
+<table>
+<thead><tr><th>Ferramenta</th><th>Use para</th></tr></thead>
+<tbody>
+<tr><td><strong>Page Info</strong></td><td>Descobrir qual template e qual controller geram cada parte da página (o primeiro passo para achar "de onde vem isso").</td></tr>
+<tr><td><strong>Content Info</strong></td><td>Ir do componente ao produto, asset ou slot no BM.</td></tr>
+<tr><td><strong>Search Info</strong></td><td>Entender a ordenação: sorting rule e score de cada hit.</td></tr>
+<tr><td><strong>Cache Info</strong></td><td>Ver o que está em cache (verde) ou não (vermelho), e o TTL de cada fragmento ou remote include.</td></tr>
+<tr><td><strong>Request Log</strong></td><td>Ver os logs (inclusive debug e exceções) da última requisição e das seguintes, AJAX incluído. Exige o mesmo hostname no BM e no storefront.</td></tr>
+<tr><td><strong>Preview Settings</strong></td><td>Ver o site numa data e hora, num customer group, com um source code, ou numa variação de A/B test.</td></tr>
+</tbody>
+</table>
+<h3 id="debugger">Script debugger</h3>
+<p>Breakpoints, step e inspeção de variáveis em sandboxes, pelo VS Code (Prophet ou a extensão oficial) ou pelas ferramentas da linha dwdebugger. Configuração no <a class="text-link" href="15-ide-deploy.html#debugger">tema 15</a>. Se o breakpoint não para, confira: a página veio do cache, o arquivo local difere da code version ativa, ou o host ou a versão do debugger estão errados.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="profilers" data-k="cap. 7">
+<h2>Profilers, Quota Status e relatórios</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Ferramenta (BM › Administration › Operations)</th><th>O que mostra</th><th>Quando</th></tr></thead>
+<tbody>
+<tr><td><strong>Pipeline Profiler</strong></td><td>Hits, tempo total e médio por controller ou pipeline e por script, enquanto está ligado</td><td>Achar o controller e o componente mais caros; comparar antes e depois de um deploy</td></tr>
+<tr><td><strong>Code Profiler</strong></td><td>Tempo por requisição, controller, API, função, linha ou template. Modos: Production (padrão fora de sandbox, amostragem), Development (padrão em sandbox), Extended Script Development (pesado). Exporta CSV de hora em hora.</td><td>Descer até a linha de código culpada</td></tr>
+<tr><td><strong>Quota Status</strong></td><td>Uso de quotas de API e de objeto, com verde, laranja (perto do limite) ou vermelho (ação necessária); status agregado com até ~20 min de atraso</td><td>Após um deploy, e sempre que aparecer "quota" nos logs</td></tr>
+<tr><td><strong>Service Status</strong></td><td>Chamadas, falhas e tempo por serviço (últimos 10 dias)</td><td>Lentidão ou erros de integração</td></tr>
+<tr><td><strong>Deprecated API Usage</strong> (Site Development)</td><td>APIs deprecated em uso</td><td>Antes de upgrades e no hardening</td></tr>
+<tr><td><strong>Reports &amp; Dashboards</strong> (aba técnica)</td><td>Tempo de resposta e cache hit ratio por controller</td><td>Performance ao longo do tempo</td></tr>
+</tbody>
+</table>
+<aside class="callout" data-kind="exam">
+<p>Quotas <strong>enforced</strong> lançam exceção e interrompem a operação (no storefront, cai na página de erro). Não capture exceções de quota: evitar a violação é critério de design. Em produção, só o Support pode "suavizar" uma quota (de error para warn). Na sandbox, importe as configurações suavizadas de produção (<em>Custom Quota Settings</em>).</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="tabela" data-k="cap. 8">
+<h2>Tabela consolidada: sintoma → causa → ação</h2>
+<div class="prose">
+<p>Reúne os casos mais cobrados, migrados da antiga vista "Debug" e organizados por área. Cada tema tem a sua própria seção de troubleshooting, com mais detalhe.</p>
+<h3 id="t-codigo">Código, deploy e cartridges</h3>
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação / ferramenta</th></tr></thead>
+<tbody>
+<tr><td>Mudança no código não aparece</td><td>Upload na code version errada, versão não ativa, página em cache, cartridge fora do path</td><td>Code Deployment; Cache Info; ative outra versão e volte (<a class="text-link" href="15-ide-deploy.html#troubleshooting">tema 15</a>)</td></tr>
+<tr><td>Rota retorna 404 ou "controller not found"</td><td>Cartridge fora do path do site; nome do arquivo ou da rota diferente; <code>module.exports = server.exports()</code> ausente</td><td>Cartridge path; Page Info (<a class="text-link" href="08-controllers.html#troubleshooting">tema 08</a>)</td></tr>
+<tr><td>Override não tem efeito</td><td>O cartridge customizado está <em>depois</em> do base no path</td><td>O path é lido da esquerda para a direita (<a class="text-link" href="07-cartridges.html">tema 07</a>)</td></tr>
+<tr><td><code>module.superModule</code> é null</td><td>Não existe arquivo de mesmo caminho em cartridges à direita</td><td>Confira o caminho relativo e o path (<a class="text-link" href="06-estender-sfra.html">tema 06</a>)</td></tr>
+<tr><td>Erro só em Production</td><td>Dados replicados diferentes, preferências por instância, credenciais de serviço não configuradas, quota enforced</td><td>Log Center; compare as preferências; Service Status</td></tr>
+<tr><td>Breakpoint não para</td><td>Página do cache; arquivo diferente da versão ativa; debugger mal configurado</td><td>Cache Info; reenvie o arquivo; <code>launch.json</code></td></tr>
+</tbody>
+</table>
+<h3 id="t-dados">Dados, catálogo, busca e preço</h3>
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação / ferramenta</th></tr></thead>
+<tbody>
+<tr><td>Produto não aparece na categoria ou na busca</td><td>Offline ou fora do intervalo online, não atribuído ao storefront catalog, sem preço ou estoque (com orderable-only), índice desatualizado</td><td>BM do produto; Search Info; reindexação (<a class="text-link" href="02-catalogo-precos-inventario.html#troubleshooting">tema 02</a>)</td></tr>
+<tr><td>Preço errado</td><td>Price book não atribuído ao site, data de validade, price book de outra moeda, hierarquia pai/filho</td><td>Price books do site; Preview Settings</td></tr>
+<tr><td>Promoção não aplica</td><td>Campanha inativa, qualificador de cliente ou cupom, exclusividade, cesta não recalculada</td><td>Storefront Toolkit e preview com grupo; <code>dw.order.calculate</code> (<a class="text-link" href="03-promocoes-carrinho-checkout.html#troubleshooting">tema 03</a>)</td></tr>
+<tr><td>Dado editado em Staging não aparece em Production</td><td>Replicação não executada, ou grupo de dados não incluído</td><td>Data Replication; staging log</td></tr>
+<tr><td>Import "OK" sem efeito, ou atributos sumiram</td><td>Modo errado (UPDATE ou REPLACE), padrão de arquivo, Active Data em REPLACE</td><td>Impex <code>log/</code> (<a class="text-link" href="18-jobs.html#troubleshooting">tema 18</a>)</td></tr>
+</tbody>
+</table>
+<h3 id="t-render">Renderização, cache e conteúdo</h3>
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação / ferramenta</th></tr></thead>
+<tbody>
+<tr><td>Dados de outro comprador na página</td><td>Fragmento pessoal dentro de uma página cacheada</td><td>Remote include sem cache (<a class="text-link" href="20-performance.html#remote-includes">tema 20</a>)</td></tr>
+<tr><td>Slot vazio</td><td>Sem configuração ativa ou default; data ou agendamento; tipo de conteúdo incompatível com o template do slot</td><td>Content Info; slot configurations (<a class="text-link" href="11-slots-page-designer.html#troubleshooting">tema 11</a>)</td></tr>
+<tr><td>Componente do Page Designer não aparece no editor</td><td>JSON ou ISML com nome diferente; cartridge fora do path; erro no JSON</td><td>Logs de erro; meta definitions (<a class="text-link" href="11-slots-page-designer.html">tema 11</a>)</td></tr>
+<tr><td>Texto aparece como chave (<code>label.xxx</code>)</td><td>Bundle ou chave inexistente para o locale; arquivo <code>.properties</code> no lugar errado</td><td><code>templates/resources</code> (<a class="text-link" href="10-isml.html#troubleshooting">tema 10</a>)</td></tr>
+<tr><td>HTML aparece escapado ou XSS</td><td><code>encoding="off"</code> mal usado (ou ausência dele em markup confiável)</td><td>Encoding padrão; <code>isprint</code> com encoding certo</td></tr>
+</tbody>
+</table>
+<h3 id="t-forms">Formulários, checkout e sessão</h3>
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação / ferramenta</th></tr></thead>
+<tbody>
+<tr><td>CSRF inválido ao enviar o form</td><td>Token ausente no template; sessão expirada; validação no lugar errado</td><td><code>csrfProtection.generateToken</code> / <code>validateRequest</code> (<a class="text-link" href="12-forms.html#troubleshooting">tema 12</a>)</td></tr>
+<tr><td>Form sempre inválido</td><td>Nome de campo diferente do XML; regex ou mandatory; form não foi limpo</td><td><code>server.forms.getForm()</code>; <code>form.clear()</code></td></tr>
+<tr><td>Falha ao criar pedido</td><td>Estoque reservado ou insuficiente; pagamento sem processor; erro em hook</td><td>Error log; <code>OrderMgr.createOrder</code> e <code>failOrder</code> (<a class="text-link" href="03-promocoes-carrinho-checkout.html#checkout">tema 03</a>)</td></tr>
+<tr><td>Erro de transação ao gravar</td><td>Escrita fora de <code>Transaction.wrap</code>; objeto somente leitura no storefront</td><td><a class="text-link" href="09-script-apis.html#transacoes">tema 09</a></td></tr>
+</tbody>
+</table>
+<h3 id="t-integra">APIs, integrações, jobs e quotas</h3>
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação / ferramenta</th></tr></thead>
+<tbody>
+<tr><td>OCAPI 401 <code>UnauthorizedException</code></td><td>Recurso, método ou versão ausente nos Settings</td><td>OCAPI Settings (<a class="text-link" href="17-ocapi.html#troubleshooting">tema 17</a>)</td></tr>
+<tr><td>Serviço <code>SERVICE_UNAVAILABLE</code></td><td>Desabilitado, circuito aberto, rate limit, timeout, configuração</td><td><code>unavailableReason</code>; Service Status (<a class="text-link" href="19-integracoes.html#troubleshooting">tema 19</a>)</td></tr>
+<tr><td>Custom step não aparece</td><td><code>steptypes.json</code> fora da raiz ou inválido</td><td>Error log (<a class="text-link" href="18-jobs.html#troubleshooting">tema 18</a>)</td></tr>
+<tr><td>Exceção de quota</td><td>Coleções enormes, objetos na sessão, loops de API, varredura do catálogo na loja</td><td>Quota Status, quota log (<a class="text-link" href="20-performance.html#quotas">tema 20</a>)</td></tr>
+<tr><td>Info e debug não aparecem no log</td><td>Nível desligado na categoria; categoria diferente; produção (debug nunca vai para arquivo)</td><td>Custom Log Settings; Request Log na sandbox</td></tr>
+<tr><td>Logs param no meio do dia</td><td>10 MB por arquivo e por dia atingidos</td><td>Reduza o volume; separe por prefixo; use Log Center</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="otimizacao" data-k="cap. 9">
+<h2>Da causa à otimização</h2>
+<div class="prose">
+<ol class="steps">
+  <li><strong>Meça</strong> com o Pipeline Profiler ou o Code Profiler e com o hit ratio dos relatórios. Escolha o controller com o maior produto <em>hits × tempo médio</em>.</li>
+  <li><strong>Cache primeiro</strong>: a rota pode ser cacheada? O que é pessoal pode ir para um remote include?</li>
+  <li><strong>Menos objetos tocados</strong>: troque varreduras de catálogo por <code>ProductSearchModel</code>, feche iterators e pagine.</li>
+  <li><strong>Menos chamadas externas</strong>: custom cache, assíncrono e timeouts curtos.</li>
+  <li><strong>Pese de novo</strong> depois do deploy e compare. Se piorou, faça rollback com a code version anterior ou com code replication Undo.</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Logar demais em produção</strong> (dados inteiros de cesta ou pedido em info): estoura os 10 MB do dia e você fica sem log quando precisa.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Logar PII ou dados de cartão.</strong> Logue IDs técnicos (número do pedido, ID do cliente).</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong><code>try/catch</code> que engole erro sem log</strong>: o sintoma aparece longe da causa.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Capturar exceção de quota e seguir em frente.</strong> Redesenhe o código.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>Logs custom: <code>Logger.getLogger(prefixo, categoria)</code> → <code>custom-prefixo-*.log</code>; níveis em <em>Custom Log Settings</em>.</li>
+  <li>Logs de todas as instâncias num lugar só: <strong>Log Center</strong>.</li>
+  <li>Logs da requisição atual, no storefront: <strong>Request Log</strong> (Storefront Toolkit).</li>
+  <li>Qual template ou controller gerou isso: <strong>Page Info</strong>. Está em cache: <strong>Cache Info</strong>.</li>
+  <li>Onde o tempo é gasto: <strong>Pipeline Profiler</strong> e <strong>Code Profiler</strong>.</li>
+  <li>Limites: <strong>Quota Status</strong> e <code>quota-*.log</code>.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting das próprias ferramentas</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>Request Log vazio</td><td>BM e storefront em hostnames diferentes; página do cache</td><td>Use o mesmo host ou o Log Center; desabilite o cache temporariamente na sandbox.</td></tr>
+<tr><td>Toolkit não abre ou fica em branco</td><td>Anti-clickjack em JS ou código que acessa <code>window.top</code>/<code>parent</code> (o Toolkit usa iframe); cookies sem <code>Secure</code> e <code>SameSite=None</code>; redirect para HTTP; certificado inválido</td><td>Use headers HTTP em vez de scripts anti-clickjack; ajuste os cookies; mantenha HTTPS (<em>Storefront Toolkit Tips and Limitations</em>).</td></tr>
+<tr><td>Code Profiler sem dados</td><td>Os dados foram zerados pela exportação horária ou pela troca de modo</td><td>Reproduza; baixe os CSVs exportados.</td></tr>
+<tr><td>Arquivo de log não encontrado</td><td>Movido para <code>log_archive</code> (depois de 3 dias) ou removido pela retenção (30 dias)</td><td>Procure em <code>log_archive</code>; use o Log Center.</td></tr>
+<tr><td>Mensagem truncada no Log Center</td><td>Mais de ~7.000 caracteres</td><td>Veja o arquivo (se não atingiu 10 MB) ou resuma a mensagem.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Aplicar um método: caracterizar, correlacionar com mudanças, isolar, corrigir e prevenir.</li>
+  <li>Identificar o log certo para cada problema e conhecer retenção e limites.</li>
+  <li>Escrever logs úteis com <code>Logger</code> (prefixo, categoria, placeholders, <code>isDebugEnabled</code>) e configurá-los no BM.</li>
+  <li>Usar o Log Center, o b2c CLI, o Storefront Toolkit e o Request Log.</li>
+  <li>Usar o Pipeline Profiler, o Code Profiler, o Quota Status e o Service Status para otimizar.</li>
+  <li>Usar a tabela de sintomas de cada área.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Um desenvolvedor usa <code>Logger.getLogger('payment', 'adyen').info(...)</code>, mas nada aparece em arquivo na Staging. Qual a causa mais provável?</p>
+  <ol class="opts-l"><li>Logs custom não funcionam em Staging</li><li>O nível INFO da categoria <code>adyen</code> não está habilitado com "Log to File" em Custom Log Settings</li><li>O prefixo precisa começar com "custom"</li><li>Falta reindexar</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Por padrão só WARN, ERROR e FATAL vão para arquivo.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual ferramenta mostra qual template e qual controller renderizam um trecho do storefront?</p>
+  <ol class="opts-l"><li>Log Center</li><li>Storefront Toolkit › Page Info</li><li>Quota Status</li><li>Code Profiler</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong></p></div></details>
+</li>
+<li>
+  <p class="drill-q">Um erro acontece só em Production e é preciso ver o stack trace de vários app servers. Onde?</p>
+  <ol class="opts-l"><li>Script debugger</li><li>Log Center</li><li>Request Log</li><li>Preview Settings</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O Log Center agrega todas as instâncias e app servers do realm. O debugger e o Request Log olham uma requisição ou sessão por vez.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Às 14h os logs custom pararam com "Maximum log file size per day reached". O que fazer?</p>
+  <ol class="opts-l"><li>Pedir ao Support para aumentar</li><li>Reduzir o volume (níveis, placeholders, menos dados) e separar por prefixos; a gravação volta às 00:00 GMT</li><li>Reiniciar a instância</li><li>Usar <code>console.log</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O limite é 10 MB por arquivo, por app server e por dia.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Após um deploy, a PLP ficou lenta. Qual a primeira ferramenta para localizar o script culpado?</p>
+  <ol class="opts-l"><li>Search Info</li><li>Pipeline Profiler ou Code Profiler</li><li>Security log</li><li>Data Replication</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Comece por hits × tempo médio e depois desça até a função ou linha.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Uma quota enforced está sendo excedida no storefront. O que é correto?</p>
+  <ol class="opts-l"><li>Capturar a exceção e continuar</li><li>Redesenhar o código para não exceder; em produção, só o Support pode suavizar a quota</li><li>Desligar a quota no BM</li><li>Ignorar</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong></p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-log-files-overview.html">Log Files</a> e Script API <code>dw.system.Logger</code> / <code>dw.system.Log</code></li>
+  <li>Help: <em>Log Center</em>, <em>Storefront Toolkit Tools</em>, <em>Examine Server Calls Using the Request Log</em>; KB 000391487 (<em>Log Center FAQ</em>)</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-troubleshooting-platform-performance.html">Troubleshooting B2C Commerce Performance</a> (Pipeline Profiler, coleta de dados)</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-site-performance.html">Site Performance</a> (Code Profiler)</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-governance-and-quotas.html">Governance and Quotas</a></li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-troubleshooting-sfra.html">Troubleshoot SFRA</a>; <a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-developer-tooling/cli/logs.html">b2c logs</a></li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>19 · Integrações síncronas e assíncronas · Guia SFCC</title>
+<meta name="description" content="Integrações no B2C Commerce: Service Framework (service, profile, credential), LocalServiceRegistry e callbacks, HTTP, HTTP Form, SOAP, FTP/SFTP e Generic, Result e status SERVICE_UNAVAILABLE, timeout, circuit breaker e rate limit, mock, logs filtrados, caching de GET, padrões assíncronos com custom objects e jobs, feeds de arquivo e integrações de entrada.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="19" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Integrações síncronas e assíncronas</h1>
+  <p class="lead">Quase todo projeto B2C fala com sistemas externos: pagamento, impostos, frete, ERP, OMS, CRM, fidelidade, busca de endereço. A pergunta de prova e de arquitetura é sempre a mesma: <strong>essa integração precisa acontecer durante a requisição do comprador (síncrona) ou pode acontecer depois (assíncrona)?</strong> Este tema cobre o <strong>Service Framework</strong>, que toda chamada de saída deve usar, e os padrões assíncronos com custom objects, jobs e feeds de arquivo.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>Integração síncrona</dt><dd>A chamada externa acontece dentro da requisição, e o comprador espera a resposta: autorização de pagamento, cálculo de imposto, validação de endereço, estoque em tempo real.</dd>
+  <dt>Integração assíncrona</dt><dd>O dado é gravado localmente e processado depois, por job ou por sistema externo: exportar pedidos para o ERP, newsletter, sincronizar catálogo, preço ou estoque, eventos de fidelidade.</dd>
+  <dt>Service Framework (<code>dw.svc</code>)</dt><dd>Camada obrigatória de boas práticas para chamadas de saída. Fornece configuração no BM, timeout, <strong>circuit breaker</strong>, <strong>rate limit</strong>, <strong>mock</strong>, logs por serviço e o painel <em>Service Status</em>.</dd>
+  <dt>Service / Profile / Credential</dt><dd>Três objetos no BM (<em>Administration &gt; Operations &gt; Services</em>). O <strong>service</strong> tem tipo, modo live ou mock, log, profile e credential. O <strong>profile</strong> tem timeout, circuit breaker e rate limit, e pode ser compartilhado. A <strong>credential</strong> tem URL, usuário e senha.</dd>
+  <dt>LocalServiceRegistry</dt><dd><code>dw.svc.LocalServiceRegistry.createService(id, callbacks)</code> cria a instância do serviço em script. Substitui o <code>ServiceRegistry</code> antigo, que está deprecated.</dd>
+</dl>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="sync-async" data-k="cap. 2">
+<h2>Síncrono ou assíncrono: como decidir</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Pergunta</th><th>Se "sim"</th></tr></thead>
+<tbody>
+<tr><td>O comprador precisa do resultado para continuar (aprovar pagamento, mostrar imposto)?</td><td>Síncrono, com timeout curto e plano B.</td></tr>
+<tr><td>O dado pode chegar minutos ou horas depois (ERP, CRM, data lake)?</td><td>Assíncrono, via job, export ou feed.</td></tr>
+<tr><td>O volume é alto ou em lote (catálogo, preços, estoque completo)?</td><td>Assíncrono, por arquivo (SFTP/WebDAV) + job de import.</td></tr>
+<tr><td>A página é muito acessada (Home, PLP, PDP, tiles)?</td><td>Evite chamadas externas; use cache, dados importados ou carregamento no cliente.</td></tr>
+<tr><td>O sistema externo é instável?</td><td>Assíncrono com fila e retentativa; se precisar ser síncrono, use circuit breaker e fallback.</td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="mmd" data-caption="padrões típicos de integração de um site B2C">
+flowchart LR
+  subgraph SYNC["Síncrono (na requisição)"]
+    PAY["Pagamento / antifraude"]
+    TAX["Imposto"]
+    ADDR["Validação de endereço"]
+  end
+  subgraph ASYNC["Assíncrono"]
+    Q["Custom object 'fila'"] --> JOB["Job (chunk)"] --> ERP["ERP / CRM"]
+    SFTP["SFTP do ERP"] --> IMP["Job: ImportCatalog / PriceBook / Inventory"]
+    EXP["Job: export de pedidos"] --> OMS["OMS"]
+  end
+  SF["Storefront (controller / hook)"] --> SYNC
+  SF -->|"grava evento"| Q
+  EXT["Sistema externo"] -->|"OCAPI/SCAPI, Custom API"| SF
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="configuracao" data-k="cap. 3">
+<h2>Configurando um serviço no Business Manager</h2>
+<div class="prose">
+<ol class="steps">
+  <li><strong>Profile</strong> (aba Profiles): <em>Timeout (ms)</em>; <em>Enable Circuit Breaker</em> (marcado por padrão; a recomendação oficial é deixá-lo ligado com as chamadas em branco ou zero, o que ativa o circuit breaker de sistema); <em>Max Circuit Breaker Calls</em> e <em>Interval</em> (preencha os dois ou nenhum); <em>Enable Rate Limit</em>, <em>Max Calls</em> e <em>Interval</em>.</li>
+  <li><strong>Credential</strong> (aba Credentials): ID sem espaços (ex.: <code>acme.http.loyalty.cred</code>), URL com protocolo, usuário e senha. A senha fica mascarada e não pode ser lida de volta.</li>
+  <li><strong>Service</strong>: ID no padrão recomendado <code>{cartridge}.{protocolo}.{serviço}.{operação}</code> (ex.: <code>acme.http.loyalty.get</code>); <strong>tipo</strong> (HTTP, HTTP Form, FTP, SFTP, SOAP, Generic); <strong>Enabled</strong> (desmarcado por padrão); <strong>Service Mode</strong> Live ou Mocked; <strong>log prefix</strong>; <em>Communication Log Enabled</em>; <em>Force PRD behavior in non-PRD</em>; profile e credential.</li>
+</ol>
+<script type="text/plain" class="src" data-lang="xml" data-file="metadata/services.xml (importado no deploy; sem segredos no Git)">
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns="http://www.demandware.com/xml/impex/services/2014-09-26">
+    <service-credential service-credential-id="acme.http.loyalty.cred">
+        <url>https://api.loyalty.example.com/v2</url>
+        <user-id>acme-sfcc</user-id>
+        <password/>
+    </service-credential>
+
+    <service-profile service-profile-id="acme.profile.fast">
+        <timeout-millis>3000</timeout-millis>
+        <rate-limit-enabled>false</rate-limit-enabled>
+        <rate-limit-calls>0</rate-limit-calls>
+        <rate-limit-millis>0</rate-limit-millis>
+        <cb-enabled>true</cb-enabled>
+        <cb-calls>10</cb-calls>
+        <cb-millis>30000</cb-millis>
+    </service-profile>
+
+    <service service-id="acme.http.loyalty.get">
+        <service-type>HTTP</service-type>
+        <enabled>true</enabled>
+        <log-prefix>loyalty</log-prefix>
+        <comm-log-enabled>false</comm-log-enabled>
+        <force-prd-enabled>true</force-prd-enabled>
+        <mock-mode-enabled>false</mock-mode-enabled>
+        <profile-id>acme.profile.fast</profile-id>
+        <credential-id>acme.http.loyalty.cred</credential-id>
+    </service>
+</services>
+</script>
+<aside class="callout" data-kind="warn">
+<p>A documentação manda configurar <strong>credenciais, chaves privadas e certificados</strong> manualmente em cada instância. Eles não são importados nem exportados junto com o código. Na prática, versione profile e service, e preencha a senha de cada ambiente direto no BM ou por um processo seguro. Senha nunca vai para o repositório.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="servico-http" data-k="cap. 4">
+<h2>Implementando um serviço HTTP/REST</h2>
+<div class="prose">
+<p>A boa prática é concentrar a definição do serviço num módulo do cartridge de integração (<code>int_*</code>), que controllers, hooks e jobs reutilizam.</p>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/int_acme_loyalty/cartridge/scripts/services/loyaltyService.js">
+'use strict';
+
+var LocalServiceRegistry = require('dw/svc/LocalServiceRegistry');
+
+/**
+ * Cria a instância do serviço (uma por chamada: o objeto é de uso único).
+ * @returns {dw.svc.HTTPService} serviço configurado
+ */
+function getService() {
+    return LocalServiceRegistry.createService('acme.http.loyalty.get', {
+        /**
+         * Monta a requisição. Os argumentos vêm de service.call(...).
+         * @param {dw.svc.HTTPService} svc - serviço
+         * @param {Object} params - { customerNo }
+         * @returns {string|null} corpo (null para GET)
+         */
+        createRequest: function (svc, params) {
+            var credential = svc.getConfiguration().getCredential();
+            svc.setRequestMethod('GET');
+            svc.setAuthentication('NONE'); // o padrão é BASIC (user/senha da credential)
+            svc.addHeader('Accept', 'application/json');
+            svc.addHeader('Authorization', 'Bearer ' + credential.getPassword());
+            svc.setURL(credential.getURL() + '/members/' + encodeURIComponent(params.customerNo));
+            return null;
+        },
+
+        /**
+         * Converte a resposta crua no objeto que service.call() devolve em result.object.
+         * @param {dw.svc.HTTPService} svc - serviço
+         * @param {dw.net.HTTPClient} client - cliente HTTP após a chamada
+         */
+        parseResponse: function (svc, client) {
+            var body = JSON.parse(client.getText());
+            return { tier: body.tier, points: body.points };
+        },
+
+        /** Resposta simulada quando o serviço está em modo Mocked (ou com setMock()). */
+        mockCall: function () {
+            return {
+                statusCode: 200,
+                statusMessage: 'Success',
+                text: JSON.stringify({ tier: 'silver', points: 14275 })
+            };
+        },
+
+        /** Mascara dados sensíveis nos logs de comunicação. */
+        filterLogMessage: function (msg) {
+            return msg.replace(/Bearer\s+[\w.\-]+/g, 'Bearer ****');
+        }
+    });
+}
+
+/**
+ * Consulta o saldo de fidelidade. Nunca lança erro: devolve null se o serviço falhar.
+ * @param {string} customerNo - número do cliente
+ * @returns {{tier: string, points: number}|null} dados ou null
+ */
+function getMember(customerNo) {
+    var Logger = require('dw/system/Logger').getLogger('loyalty', 'loyaltyService');
+    var result = getService().call({ customerNo: customerNo });
+
+    if (result.ok) {
+        return result.object;
+    }
+    if (result.status === 'SERVICE_UNAVAILABLE') {
+        // CIRCUIT_BROKEN, RATE_LIMITED, DISABLED, CONFIG_PROBLEM ou TIMEOUT
+        Logger.warn('loyalty indisponível: {0}', result.unavailableReason);
+    } else {
+        // ERROR: result.error = código (ex.: HTTP 404); errorMessage = detalhe
+        Logger.error('loyalty erro {0}: {1}', result.error, result.errorMessage);
+    }
+    return null;
+}
+
+module.exports = { getService: getService, getMember: getMember };
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/app_custom_acme/cartridge/controllers/Account.js (uso com fallback)">
+'use strict';
+
+var server = require('server');
+server.extend(module.superModule);
+
+server.append('Show', function (req, res, next) {
+    var loyaltyService = require('*/cartridge/scripts/services/loyaltyService');
+    var member = loyaltyService.getMember(req.currentCustomer.profile.customerNo);
+    res.setViewData({
+        loyalty: member || { unavailable: true } // a página nunca quebra por causa do parceiro
+    });
+    next();
+});
+
+module.exports = server.exports();
+</script>
+<h3 id="callbacks">Ordem dos callbacks</h3>
+<table>
+<thead><tr><th>Callback</th><th>Quando</th><th>Obrigatório em</th></tr></thead>
+<tbody>
+<tr><td><code>initServiceClient(svc)</code></td><td>Cria o cliente subjacente</td><td>SOAP</td></tr>
+<tr><td><code>createRequest(svc, ...args)</code></td><td>Recebe os argumentos de <code>call()</code> e monta a requisição</td><td>Todos</td></tr>
+<tr><td><code>execute(svc, request)</code></td><td>Faz a chamada (o cliente já tem as credenciais)</td><td>SOAP; FTP/SFTP sem <code>setOperation</code></td></tr>
+<tr><td><code>parseResponse(svc, response)</code></td><td>Converte no objeto devolvido em <code>result.object</code></td><td>Recomendado</td></tr>
+<tr><td><code>mockCall(svc, request)</code> / <code>mockFull(svc, ...args)</code></td><td>Substituem o <code>execute</code> (ou o ciclo inteiro) em modo mock</td><td>Opcional</td></tr>
+<tr><td><code>filterLogMessage</code>, <code>getRequestLogMessage</code>, <code>getResponseLogMessage</code></td><td>Controlam o que vai para o log de comunicação</td><td>Necessário para ter comm log em produção</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="resiliencia" data-k="cap. 5">
+<h2>Timeout, circuit breaker, rate limit e cache</h2>
+<div class="prose">
+<ul>
+  <li><strong>Timeout</strong> (profile): vale para a conexão e para cada leitura de socket. A duração total pode passar dele: com timeout de 5000 ms, conectar em 4 s e ler dois blocos de 4 s cada dá uns 13 s sem estourar. Defina o valor pelo SLA do parceiro e pelo gráfico de duração no <em>Service Status</em>. Em checkout, seja agressivo.</li>
+  <li><strong>Circuit breaker</strong>: se N chamadas falharem no intervalo, as próximas nem são feitas e o resultado é <code>SERVICE_UNAVAILABLE</code> com motivo <code>CIRCUIT_BROKEN</code>. Contam como falha: host desconhecido, timeout de conexão, conexão recusada, HTTP 5xx e exceções lançadas no callback. <strong>HTTP 4xx não conta</strong>, porque o servidor remoto está bem e o erro é do cliente.</li>
+  <li><strong>Rate limit</strong>: no máximo N chamadas por intervalo. Acima disso vem <code>RATE_LIMITED</code>.</li>
+  <li><strong><code>setThrowOnError()</code></strong>: faz <code>call()</code> lançar exceção em vez de devolver um Result com erro. Útil em jobs, onde a exceção vira exit status ERROR.</li>
+  <li><strong>Cache de GET</strong>: <code>svc.setCachingTTL(segundos)</code> armazena respostas 2xx com menos de 50 KB, usando a URL e o usuário como chave. Use só quando a resposta depende apenas da URL.</li>
+  <li><strong>Quota</strong>: o storefront permite no máximo <strong>16</strong> chamadas <code>HTTPClient.send()</code> por página (com aviso a partir de 10). Integrações em loop por item de cesta violam isso. Agrupe numa chamada ou faça de forma assíncrona.</li>
+</ul>
+<aside class="callout" data-kind="exam">
+<p>Os status de <code>dw.svc.Result</code> são <code>OK</code>, <code>ERROR</code> (a chamada foi feita e falhou; <code>result.error</code> traz o código) e <code>SERVICE_UNAVAILABLE</code> (com <code>unavailableReason</code>: <code>CIRCUIT_BROKEN</code>, <code>RATE_LIMITED</code>, <code>DISABLED</code>, <code>CONFIG_PROBLEM</code> ou <code>TIMEOUT</code>).</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="outros-tipos" data-k="cap. 6">
+<h2>SOAP, HTTP Form, SFTP e Generic</h2>
+<div class="prose">
+<h3 id="soap">SOAP (WSDL em <code>webreferences2</code>)</h3>
+<p>Coloque o WSDL em <code>cartridge/webreferences2/</code>. A plataforma gera as classes no pacote <code>webreferences2.&lt;NomeDoWSDL&gt;</code>. Opções de geração ficam num <code>&lt;wsdl&gt;.properties</code> ao lado, e a keystore de WS-Security vai na mesma pasta.</p>
+<script type="text/plain" class="src" data-lang="js" data-file="int_acme_tax/cartridge/scripts/services/taxService.js">
+var LocalServiceRegistry = require('dw/svc/LocalServiceRegistry');
+
+var taxService = LocalServiceRegistry.createService('acme.soap.tax.calculate', {
+    initServiceClient: function () {
+        this.webReference = webreferences2.TaxCalculation; // TaxCalculation.wsdl
+        return this.webReference.getDefaultService();      // vira svc.serviceClient
+    },
+    createRequest: function (svc, basket) {
+        var req = new this.webReference.CalculateTaxRequest();
+        req.setCurrency(basket.currencyCode);
+        // ... linhas, endereços
+        return req;
+    },
+    execute: function (svc, req) {
+        return svc.serviceClient.calculateTax(req);
+    },
+    parseResponse: function (svc, response) {
+        return { totalTax: response.getTotalTax() };
+    }
+});
+</script>
+<ul>
+  <li><strong>HTTP Form</strong>: como o HTTP, mas <code>createRequest</code> monta um POST <code>application/x-www-form-urlencoded</code> a partir dos parâmetros.</li>
+  <li><strong>FTP/SFTP</strong>: <code>svc.setOperation('list', '/out')</code> para uma operação só, ou um callback <code>execute</code> que usa <code>svc.getClient()</code> para várias operações em sequência (exemplo no <a class="text-link" href="18-jobs.html#task">tema 18</a>). Autenticação por chave: <code>SFTPClient.setIdentity(KeyRef)</code>.</li>
+  <li><strong>Generic</strong>: não envolve cliente nenhum. Serve para chamadas customizadas que ainda querem circuit breaker, rate limit, log e mock do framework.</li>
+  <li><strong>mTLS e certificados</strong>: <em>Administration &gt; Operations &gt; Private Keys and Certificates</em>; em código, <code>HTTPService.setIdentity(new KeyRef(alias))</code>.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="assincrono" data-k="cap. 7">
+<h2>Padrões assíncronos</h2>
+<div class="prose">
+<h3 id="fila-co">Fila com custom object + job</h3>
+<p>O storefront só grava o evento, o que é rápido e não depende do parceiro. Um job processa a fila, chama o serviço, faz retentativa e remove o que foi entregue. O tipo de custom object precisa ser <strong>não replicável</strong> para poder ser escrito no storefront (<a class="text-link" href="13-custom-objects.html">tema 13</a>).</p>
+<script type="text/plain" class="src" data-lang="js" data-file="int_acme_loyalty/cartridge/scripts/queue/loyaltyQueue.js">
+'use strict';
+
+var CustomObjectMgr = require('dw/object/CustomObjectMgr');
+var Transaction = require('dw/system/Transaction');
+var UUIDUtils = require('dw/util/UUIDUtils');
+
+var TYPE = 'AcmeLoyaltyEvent'; // key: ID (String); attrs: payload (Text), attempts (Integer), lastError (String)
+
+/** Enfileira um evento (chamado em hook de pedido ou controller). */
+function enqueue(eventType, data) {
+    Transaction.wrap(function () {
+        var co = CustomObjectMgr.createCustomObject(TYPE, UUIDUtils.createUUID());
+        co.custom.payload = JSON.stringify({ type: eventType, data: data, at: Date.now() });
+        co.custom.attempts = 0;
+    });
+}
+
+module.exports = { enqueue: enqueue, TYPE: TYPE };
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="int_acme_loyalty/cartridge/scripts/steps/processLoyaltyQueue.js (chunk step)">
+'use strict';
+
+var CustomObjectMgr = require('dw/object/CustomObjectMgr');
+var Transaction = require('dw/system/Transaction');
+var Logger = require('dw/system/Logger').getLogger('loyalty', 'queue');
+var queue = require('*/cartridge/scripts/queue/loyaltyQueue');
+var LocalServiceRegistry = require('dw/svc/LocalServiceRegistry');
+
+var MAX_ATTEMPTS = 5;
+var events;
+var service;
+
+exports.beforeStep = function () {
+    events = CustomObjectMgr.queryCustomObjects(queue.TYPE, 'custom.attempts < {0}', 'creationDate asc', MAX_ATTEMPTS);
+    service = LocalServiceRegistry.createService('acme.http.loyalty.events', {
+        createRequest: function (svc, payload) {
+            svc.setRequestMethod('POST');
+            svc.addHeader('Content-Type', 'application/json');
+            return payload;
+        },
+        parseResponse: function (svc, client) { return client.statusCode; }
+    });
+};
+
+exports.getTotalCount = function () { return events.count; };
+
+exports.read = function () { return events.hasNext() ? events.next() : undefined; };
+
+exports.process = function (co) {
+    var result = service.call(co.custom.payload);
+    return { co: co, ok: result.ok, error: result.ok ? null : (result.unavailableReason || result.errorMessage) };
+};
+
+exports.write = function (items) {
+    for (var i = 0; i < items.size(); i++) {
+        var item = items.get(i);
+        Transaction.wrap(function () {
+            if (item.ok) {
+                CustomObjectMgr.remove(item.co); // entregue
+            } else {
+                item.co.custom.attempts += 1;   // fica para a próxima execução
+                item.co.custom.lastError = String(item.error).substring(0, 250);
+            }
+        });
+        if (!item.ok) { Logger.warn('evento {0} falhou: {1}', item.co.custom.ID, item.error); }
+    }
+};
+
+exports.afterStep = function () { if (events) { events.close(); } };
+</script>
+<h3 id="outros-assincronos">Outras formas</h3>
+<ul>
+  <li><strong>Feeds de arquivo</strong>: o ERP deposita XML ou CSV no SFTP (ou no WebDAV IMPEX), e um job baixa e importa com os steps padrão (<a class="text-link" href="18-jobs.html">tema 18</a>). É o caminho para catálogo, preço e estoque em massa.</li>
+  <li><strong>Export de pedidos</strong>: um job lê os pedidos com <code>exportStatus = READY</code>, envia ou grava o arquivo e marca como EXPORTED. O próprio export status funciona como fila.</li>
+  <li><strong>Pull pelo sistema externo</strong>: o OMS ou ERP consulta pedidos e atualiza status ou estoque via OCAPI Data, SCAPI Admin ou Custom API (<a class="text-link" href="17-ocapi.html">tema 17</a>).</li>
+  <li><strong>Webhooks de entrada</strong> (ex.: notificação do PSP): um controller dedicado valida a assinatura, grava o evento e responde 200 rapidamente. O processamento pesado vai para a fila.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="logs-servico" data-k="cap. 8">
+<h2>Logs e monitoramento de serviços</h2>
+<div class="prose">
+<ul>
+  <li>Arquivo: <code>service-{logPrefix}-…-{data}.log</code> (sem prefixo, o nome usa <code>main</code>). As categorias são <strong>head</strong> (sucesso ou falha por chamada), <strong>comm</strong> (dados da requisição e da resposta, desligado por padrão, nível INFO) e <strong>log</strong> (inicialização e traces).</li>
+  <li>Os segmentos do ID do serviço (<code>acme.http.loyalty.get</code>) formam a <strong>hierarquia de log</strong>. Isso permite ligar DEBUG para uma integração só.</li>
+  <li>Em <strong>produção</strong>, o comm log só é gravado se houver filtro (<code>filterLogMessage</code> ou <code>getRequestLogMessage</code> + <code>getResponseLogMessage</code>). <em>Force PRD behavior</em> aplica a mesma regra em outras instâncias.</li>
+  <li><strong>Service Status</strong> (<em>Administration &gt; Operations</em>): chamadas, falhas e tempo médio quase em tempo real, com histórico de 10 dias.</li>
+  <li><strong>Log Center</strong>: alertas por serviço. As quotas de log custom são 10 MB e 40 prefixos; logs de serviço contam só no limite de tamanho.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong><code>new HTTPClient()</code> direto no controller</strong>: sem circuit breaker, mock, log padronizado ou Service Status. Use sempre o Service Framework.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Chamada externa em Home, PLP, PDP ou tiles</strong>: multiplica a carga, derruba a performance e consome a quota de 16 chamadas por página.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Não tratar <code>SERVICE_UNAVAILABLE</code></strong>: com o circuito aberto, a página quebra ou o checkout trava em vez de cair no fallback.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Comm log sem filtro</strong>, com cartão, token ou dados pessoais no log.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Sincronizar estoque ou catálogo inteiro por API a cada requisição.</strong> Use feeds e jobs.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>Toda chamada de saída usa <code>LocalServiceRegistry.createService</code> + <code>service.call()</code>.</li>
+  <li>Os três objetos de BM são service, profile e credential; timeout, circuit breaker e rate limit ficam no <strong>profile</strong>.</li>
+  <li>Mock: Service Mode = Mocked + <code>mockCall</code>, ou <code>service.setMock().call()</code>.</li>
+  <li>Integração que não precisa de resposta imediata → assíncrona (custom object e job, ou feeds).</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td><code>SERVICE_UNAVAILABLE</code> / <code>DISABLED</code></td><td>Serviço com Enabled desmarcado (o padrão)</td><td>Habilite no BM.</td></tr>
+<tr><td><code>CONFIG_PROBLEM</code></td><td>ID errado em <code>createService</code>; credential ou profile ausente na instância</td><td>Confira o ID e importe ou crie a configuração.</td></tr>
+<tr><td><code>CIRCUIT_BROKEN</code> em rajada</td><td>Parceiro fora do ar, timeouts ou 5xx</td><td>Service Status e logs <em>head</em>; fallback; avise o parceiro.</td></tr>
+<tr><td><code>TIMEOUT</code></td><td>Timeout do profile menor que a latência real</td><td>Ajuste pelo SLA; avalie fazer assíncrono.</td></tr>
+<tr><td><code>ERROR</code> com 401/403</td><td>Credencial errada naquela instância (não replicada)</td><td>Recadastre a credencial na instância.</td></tr>
+<tr><td>Resposta igual para todos</td><td><code>setCachingTTL</code> numa resposta que depende de mais do que a URL</td><td>Desligue o cache ou mude a chave (URL).</td></tr>
+<tr><td>Quota <code>HTTPClient.send</code> excedida</td><td>Chamada por item ou em loop</td><td>Agrupe numa chamada; use cache ou fila.</td></tr>
+<tr><td>Nada no comm log em produção</td><td>Sem callback de filtro</td><td>Implemente <code>filterLogMessage</code> ou os getters de log.</td></tr>
+<tr><td>Classes do WSDL não existem</td><td>WSDL fora de <code>webreferences2</code> ou com erro de geração</td><td>Mova o arquivo e veja o log de erro da geração.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Classificar uma integração como síncrona ou assíncrona e justificar.</li>
+  <li>Criar service, profile e credential no BM e versioná-los sem segredos.</li>
+  <li>Implementar callbacks HTTP, SOAP e SFTP, com mock e filtro de log.</li>
+  <li>Tratar <code>Result</code> (OK, ERROR, SERVICE_UNAVAILABLE e os motivos) com fallback.</li>
+  <li>Configurar timeout, circuit breaker e rate limit segundo o SLA.</li>
+  <li>Montar uma fila com custom object + job, e feeds com import/export.</li>
+  <li>Diagnosticar com Service Status, logs <code>service-*</code> e Log Center.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Cada pedido deve ser enviado ao CRM, mas o CRM às vezes fica fora do ar e o comprador não deve esperar. Qual abordagem?</p>
+  <ol class="opts-l"><li>Chamar o CRM no <code>PlaceOrder</code> com timeout longo</li><li>Gravar um evento (custom object ou export status) e enviar por job com retentativa</li><li>Chamar o CRM no navegador</li><li>Enviar só por e-mail</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Integração assíncrona: não bloqueia o checkout e tolera indisponibilidade.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Onde se configura o timeout de um serviço?</p>
+  <ol class="opts-l"><li>Na credential</li><li>No service profile</li><li>No <code>package.json</code></li><li>No <code>hooks.json</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O profile guarda timeout, circuit breaker e rate limit, e pode ser compartilhado.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">O <code>result.status</code> é <code>SERVICE_UNAVAILABLE</code> e o <code>unavailableReason</code> é <code>CIRCUIT_BROKEN</code>. O que aconteceu?</p>
+  <ol class="opts-l"><li>A chamada foi feita e voltou 404</li><li>Nenhuma chamada foi feita: falhas recentes abriram o circuit breaker</li><li>O serviço está em mock</li><li>A credencial expirou</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> HTTP 4xx nem conta para o circuit breaker.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Como testar o fluxo sem o parceiro disponível?</p>
+  <ol class="opts-l"><li>Comentar a chamada</li><li>Service Mode = Mocked com um callback <code>mockCall</code>, ou <code>service.setMock().call()</code></li><li>Apontar a credencial para localhost</li><li>Desabilitar o serviço</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong></p></div></details>
+</li>
+<li>
+  <p class="drill-q">O estoque de 500 mil SKUs vem do ERP várias vezes ao dia. Qual integração?</p>
+  <ol class="opts-l"><li>Chamada HTTP na PDP</li><li>Feed de inventory list por SFTP + job ImportInventoryLists (delta)</li><li>Custom object por SKU</li><li>OCAPI Shop</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Para dado em massa, use feed e job.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Por que o comm log não aparece em produção, mesmo com "Communication Log Enabled"?</p>
+  <ol class="opts-l"><li>Produção não tem logs</li><li>Produção exige callback de filtro (<code>filterLogMessage</code> ou os getters de log)</li><li>Falta a quota</li><li>O log prefix está vazio</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong></p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-webservices.html">Web Services</a> (configuração, callbacks, circuit breaker, logging, SOAP)</li>
+  <li>Script API: <code>dw.svc.LocalServiceRegistry</code>, <code>dw.svc.ServiceCallback</code>, <code>dw.svc.HTTPService</code>, <code>dw.svc.FTPService</code>, <code>dw.svc.Result</code>, <code>dw.net.SFTPClient</code></li>
+  <li>Knowledge Article 000391847: <em>B2C Commerce – Web Service Checklist</em></li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/quota/html/API_Quotas.html">API Quotas</a> (<code>HTTPClient.send</code>, logs)</li>
+  <li>Schema <code>services.xsd</code> (<code>b2c docs schema services</code>)</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

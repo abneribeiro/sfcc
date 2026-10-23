@@ -1,0 +1,791 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>02 · Catálogos, produtos, preços e inventário · Guia SFCC</title>
+<meta name="description" content="Master e storefront catalogs, categorias, tipos de produto, price books e resolução de preço, inventory lists e ATS no Salesforce B2C Commerce, com XML de import e APIs dw.catalog.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="02" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Catálogos, produtos, preços e inventário</h1>
+  <p class="lead">Todo storefront responde a quatro perguntas sobre cada produto: <strong>ele existe e aparece aqui?</strong> (catálogo e categoria), <strong>o que exatamente estou vendendo?</strong> (tipo de produto), <strong>quanto custa?</strong> (price books) e <strong>posso vender agora?</strong> (inventário). Este tema explica como o B2C Commerce responde a cada uma delas, com os dados de BM, o XML de import e as APIs <code>dw.catalog</code>. Promoções, carrinho e checkout ficam no <a class="text-link" href="03-promocoes-carrinho-checkout.html">tema 03</a>.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>Catalog</dt><dd>Um contêiner de produtos e/ou categorias, definido no nível da organização. Existem dois papéis: catálogo de produtos (master) e catálogo de vitrine (storefront).</dd>
+  <dt>Master / product catalog</dt><dd>O <strong>dono</strong> dos produtos. Espelha o sistema de origem (PIM ou ERP) e <strong>não é atribuído a um site</strong>.</dd>
+  <dt>Storefront / site catalog</dt><dd>Define a árvore de categorias que vira a navegação da loja e <strong>atribui</strong> produtos (de um ou mais masters) a essas categorias. Cada site tem exatamente um storefront catalog.</dd>
+  <dt>Category assignment</dt><dd>Vínculo produto → categoria. Um produto pode estar em várias categorias, inclusive de catálogos diferentes; uma delas pode ser marcada como <em>primary</em> (breadcrumb e URL).</dd>
+  <dt>Classification category</dt><dd>A categoria (normalmente no master) que define quais <em>attribute groups</em> o produto exibe na PDP.</dd>
+  <dt>Base product (master)</dt><dd>Produto não vendável que representa todas as variações. A API o chama de <em>master</em> (<code>product.isMaster()</code>); a ajuda atual do BM usa o nome <em>base product</em>.</dd>
+  <dt>Price book</dt><dd>Tabela de preços numa moeda, definida para a organização e atribuída a um ou mais sites (a relação é N:N).</dd>
+  <dt>Price table</dt><dd>Os preços de um produto dentro de um price book, por quantidade (preço escalonado) e com período de validade opcional.</dd>
+  <dt>Inventory list</dt><dd>Lista de registros de estoque (<em>inventory records</em>). Cada site usa uma lista; uma lista pode servir vários sites.</dd>
+  <dt>ATS</dt><dd><em>Available To Sell</em>: o que ainda pode ser vendido, incluindo a cota de pre-order ou backorder.</dd>
+</dl>
+
+<script type="text/plain" class="mmd" data-caption="as quatro perguntas e onde cada uma é respondida">
+flowchart LR
+  Q1["Existe e aparece<br/>neste site?"] --> A1["Master catalog (dono)<br/>+ storefront catalog (assignment)<br/>+ online / searchable"]
+  Q2["O que é vendido?"] --> A2["Tipo de produto<br/>standard, master/variant,<br/>variation group, set, bundle, option"]
+  Q3["Quanto custa?"] --> A3["Price books atribuídos ao site<br/>na moeda da sessão<br/>(menor preço aplicável)"]
+  Q4["Posso vender agora?"] --> A4["Inventory list do site<br/>record: allocation, perpetual,<br/>pre/backorder → ATS"]
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="catalogos" data-k="cap. 2">
+<h2>Master catalog × storefront catalog</h2>
+<div class="prose">
+<p>A boa prática documentada é usar <strong>dois catálogos</strong>: o catálogo de produtos, que espelha o sistema de origem e não vai para site nenhum, e o catálogo de vitrine, cujas categorias formam a navegação. Separar os dois permite que um único master alimente vários sites (país, outlet, B2B) com navegações diferentes, sem duplicar dados de produto.</p>
+
+<script type="text/plain" class="mmd" data-caption="um master alimentando dois sites">
+flowchart LR
+  subgraph MASTER["apparel-master (dono, sem site)"]
+    P1["CAM-001"]
+    P2["TEN-002"]
+  end
+  subgraph SFBR["storefront-br"]
+    R1["root"] --> C1["masculino"] --> C11["camisetas"]
+    R1 --> C2["ofertas"]
+  end
+  subgraph SFOUT["storefront-outlet"]
+    R2["root"] --> C3["outlet"]
+  end
+  P1 -. "assignment (primary)" .-> C11
+  P1 -. "assignment" .-> C2
+  P1 -. "assignment" .-> C3
+  SFBR == "atribuído (1 por site)" ==> S1["site loja-br"]
+  SFOUT == "atribuído" ==> S2["site outlet-br"]
+</script>
+
+<h3 id="regras-catalogo">Regras de posse e atribuição</h3>
+<ul>
+  <li>Cada produto pertence a <strong>um único</strong> catálogo, o que o "possui" (<em>owning catalog</em>).</li>
+  <li>Um produto pode ser <strong>atribuído</strong> a categorias de qualquer catálogo; é assim que o storefront catalog "pega emprestados" produtos do master.</li>
+  <li>Cada site tem <strong>um</strong> storefront catalog; um catálogo de vitrine pode ser compartilhado por vários sites.</li>
+  <li>Catálogos são criados e mantidos em <strong>Staging</strong> e replicados (tarefa <em>Catalogs</em>, junto com os índices de busca quando vão para produção).</li>
+</ul>
+
+<h3 id="visibilidade">Checklist: por que o produto não aparece?</h3>
+<p>Um produto só aparece na listagem (PLP) e na busca quando <strong>todas</strong> estas condições valem:</p>
+<ol class="steps">
+  <li>Está <strong>online</strong> (<code>online-flag</code>), e a data atual está dentro de <code>online-from</code> e <code>online-to</code>, se definidos.</li>
+  <li>Está <strong>atribuído</strong> a uma categoria <strong>online</strong> do storefront catalog do site; a categoria e as ancestrais também precisam estar online.</li>
+  <li>É <strong>searchable</strong> (<code>searchable-flag</code>).</li>
+  <li>Se a preferência de busca <em>Show Orderable Products Only</em> estiver ligada, precisa ser <strong>orderable</strong> (com preço e estoque).</li>
+  <li>O <strong>índice de busca</strong> foi reconstruído ou atualizado depois das mudanças.</li>
+</ol>
+<p>A PDP (<code>Product-Show</code>) é mais permissiva que a busca: ela carrega o produto pelo ID e exige que esteja online e atribuído ao site catalog, mas não depende do índice.</p>
+
+<h3 id="xml-catalogo">Catálogo em XML (import)</h3>
+<p>Em projetos reais o catálogo chega por import (job <code>ImportCatalog</code> ou <em>Site Import</em>). O namespace e os elementos abaixo seguem o <code>catalog.xsd</code> oficial. O primeiro arquivo é o master, dono dos produtos:</p>
+<script type="text/plain" class="src" data-lang="xml" data-file="impex/catalogs/apparel-master/catalog.xml">
+<?xml version="1.0" encoding="UTF-8"?>
+<catalog xmlns="http://www.demandware.com/xml/impex/catalog/2006-10-31" catalog-id="apparel-master">
+    <header>
+        <image-settings>
+            <internal-location base-path="/images"/>
+            <view-types><view-type>large</view-type><view-type>small</view-type></view-types>
+            <alt-pattern>${productname}</alt-pattern>
+            <title-pattern>${productname}</title-pattern>
+        </image-settings>
+    </header>
+
+    <!-- produto standard (dono: apparel-master) -->
+    <product product-id="CANECA-01">
+        <display-name xml:lang="x-default">Caneca Esmaltada</display-name>
+        <display-name xml:lang="pt-BR">Caneca Esmaltada</display-name>
+        <online-flag>true</online-flag>
+        <searchable-flag>true</searchable-flag>
+        <tax-class-id>standard</tax-class-id>
+        <brand>Acme</brand>
+    </product>
+</catalog>
+</script>
+<p>O segundo arquivo é o storefront catalog: só categorias e atribuições, sem dados de produto.</p>
+<script type="text/plain" class="src" data-lang="xml" data-file="impex/catalogs/storefront-br/catalog.xml">
+<?xml version="1.0" encoding="UTF-8"?>
+<catalog xmlns="http://www.demandware.com/xml/impex/catalog/2006-10-31" catalog-id="storefront-br">
+    <category category-id="root">
+        <display-name xml:lang="x-default">Loja BR</display-name>
+        <online-flag>true</online-flag>
+    </category>
+    <category category-id="casa">
+        <display-name xml:lang="x-default">Casa</display-name>
+        <online-flag>true</online-flag>
+        <parent>root</parent>
+        <custom-attributes>
+            <!-- atributo custom usado pelo SFRA para montar o menu (models/categories.js) -->
+            <custom-attribute attribute-id="showInMenu">true</custom-attribute>
+        </custom-attributes>
+    </category>
+
+    <!-- assignment: o produto pertence a apparel-master, mas aparece em "casa" -->
+    <category-assignment category-id="casa" product-id="CANECA-01">
+        <primary-flag>true</primary-flag>
+    </category-assignment>
+</catalog>
+</script>
+<p>A atribuição do storefront catalog ao site fica nos dados do site (<code>sites/&lt;site-id&gt;/site.xml</code> num site export) ou em <em>Merchant Tools &gt; Products and Catalogs &gt; Catalogs</em>, no catálogo, na aba de atribuição de site. Os passos de BM estão no <a class="text-link" href="14-business-manager.html">tema 14</a>.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="categorias" data-k="cap. 3">
+<h2>Categorias</h2>
+<div class="prose">
+<p>As categorias formam uma árvore a partir de <code>root</code>. Além do nome e da posição, cada categoria carrega o que a PLP precisa:</p>
+<table>
+<thead><tr><th>Recurso</th><th>O que faz</th><th>Onde</th></tr></thead>
+<tbody>
+<tr><td>Online / online-from / online-to</td><td>Visibilidade da categoria (e de tudo abaixo dela)</td><td>Aba General da categoria</td></tr>
+<tr><td>Refinement definitions</td><td>Filtros da PLP (cor, tamanho, preço, atributos custom); são herdados pelas subcategorias</td><td>Aba Search Refinement Definitions</td></tr>
+<tr><td>Sorting rules</td><td>Ordenação padrão dos produtos da categoria</td><td>Merchant Tools &gt; Search &gt; Sorting Rules, atribuídas à categoria</td></tr>
+<tr><td>Attribute groups</td><td>Quais atributos aparecem na PDP (na classification category)</td><td>Aba Category Attributes</td></tr>
+<tr><td>Template</td><td>Template ISML alternativo para renderizar a categoria</td><td>Campo Template</td></tr>
+<tr><td>Category links</td><td>Liga categorias (ex.: "veja também") sem mover produtos</td><td>Aba Category Links</td></tr>
+<tr><td>Atributos custom</td><td>Ex.: <code>showInMenu</code> e <code>alternativeUrl</code> no SFRA</td><td>System Object Types &gt; Category</td></tr>
+</tbody>
+</table>
+
+<h3 id="menu-sfra">Como o SFRA monta o menu</h3>
+<p>O model <code>models/categories.js</code> do SFRA percorre as subcategorias online de <code>root</code>, ignora as que não têm <code>custom.showInMenu = true</code> e as que não têm produtos nem subcategorias online, e usa <code>custom.alternativeUrl</code> quando existe (senão, <code>Search-Show?cgid=…</code>). Trecho real do model:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="app_storefront_base/cartridge/models/categories.js (trecho)">
+function categoryToObject(category) {
+    if (!category.custom || !category.custom.showInMenu) {
+        return null;
+    }
+    var result = {
+        name: category.getDisplayName(),
+        url: getCategoryUrl(category),
+        id: category.ID
+    };
+    var subCategories = category.hasOnlineSubCategories() ?
+        category.getOnlineSubCategories() : null;
+    // ... recursão nas subcategorias que tenham produtos ou subcategorias online
+    return result;
+}
+</script>
+<aside class="callout" data-kind="exam">
+<p>"Criei a categoria e ela não aparece no menu." Confira, nesta ordem: a categoria está no <strong>storefront catalog</strong> do site (e não só no master); está online; tem <code>showInMenu</code> marcado; tem produtos ou subcategorias online; e o menu está em cache (o header do SFRA é um remote include cacheado). Invalide o cache depois de corrigir.</p>
+</aside>
+
+<h3 id="api-categorias">Lendo categorias pela API</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/app_custom/cartridge/scripts/helpers/categoryHelpers.js">
+'use strict';
+
+var CatalogMgr = require('dw/catalog/CatalogMgr');
+
+/**
+ * Breadcrumb de uma categoria até (sem incluir) a raiz do site catalog.
+ * @param {string} cgid
+ * @returns {Array<{id: string, name: string}>}
+ */
+function breadcrumb(cgid) {
+    var category = CatalogMgr.getCategory(cgid); // resolve no catálogo do site
+    var trail = [];
+    while (category && !category.isRoot()) {
+        trail.unshift({ id: category.getID(), name: category.getDisplayName() });
+        category = category.getParent();
+    }
+    return trail;
+}
+
+/** Subcategorias de primeiro nível visíveis no site. */
+function topLevel() {
+    var root = CatalogMgr.getSiteCatalog().getRoot();
+    return root.getOnlineSubCategories().toArray().map(function (c) {
+        return { id: c.ID, name: c.displayName, hasProducts: c.hasOnlineProducts() };
+    });
+}
+
+module.exports = { breadcrumb: breadcrumb, topLevel: topLevel };
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="tipos" data-k="cap. 4">
+<h2>Tipos de produto</h2>
+<div class="prose">
+<p>A tabela resume a documentação oficial <em>Product Types and Variations</em>. Vale ler as regras de preço, promoção e disponibilidade de cada linha: são exatamente o tipo de detalhe que o exame cobra.</p>
+<table>
+<thead><tr><th>Tipo</th><th>Vendável?</th><th>Preço</th><th>Estoque</th><th>Exemplo</th></tr></thead>
+<tbody>
+<tr><td><strong>Standard</strong></td><td>Sim</td><td>Próprio</td><td>Registro próprio</td><td>Caneca</td></tr>
+<tr><td><strong>Base (master)</strong></td><td><strong>Não</strong></td><td>Calculado a partir das variantes (normalmente uma faixa)</td><td>Sem registro; derivado das variantes</td><td>"Camiseta Básica"</td></tr>
+<tr><td><strong>Variation group</strong></td><td>Não diretamente (compra-se a variante)</td><td>Faixa das variantes do grupo</td><td>Soma das variantes</td><td>"Camiseta Básica Azul" (todas as azuis)</td></tr>
+<tr><td><strong>Variant</strong></td><td>Sim</td><td>Próprio (se não houver, cai no preço do master)</td><td>Registro próprio</td><td>Azul, M</td></tr>
+<tr><td><strong>Product set</strong></td><td>Não (compram-se os itens)</td><td>Soma dos itens; não se define preço do set</td><td>Sem registro; cada item tem o seu</td><td>"Look de verão"</td></tr>
+<tr><td><strong>Bundle</strong></td><td>Sim, como unidade</td><td>Próprio, independente dos itens</td><td>Registro próprio <em>e</em> dos itens</td><td>"Kit barbear"</td></tr>
+</tbody>
+</table>
+<p><strong>Options</strong> não são um tipo à parte: qualquer produto vendável pode ter <em>product options</em> (garantia, gravação), com preço por valor de opção. O carrinho as representa como <em>option line items</em>.</p>
+
+<h3 id="regras-tipos">Regras que caem na prova</h3>
+<ul>
+  <li>O <strong>master não vai para o carrinho</strong>. Só variantes (e standard, bundles…) são orderable.</li>
+  <li>Variantes <strong>herdam</strong> do master os atributos que elas mesmas não definem.</li>
+  <li>Um <strong>product set pode conter produtos e outros product sets</strong> (a documentação diz "zero, one or many products, and other product sets"). Sets não têm promoções; os itens dentro deles, sim.</li>
+  <li>Um <strong>bundle</strong> pode conter um master com variações e até outro bundle. Promoções valem para o bundle, não para os itens internos.</li>
+  <li>Disponibilidade: um master ou um set estão disponíveis se pelo menos uma variante ou item estiver; um bundle com registro próprio só está disponível se o bundle <em>e</em> os itens estiverem.</li>
+  <li>Variation attributes podem ser <strong>locais</strong> (do produto) ou <strong>compartilhados</strong> (definidos no catálogo e reutilizados).</li>
+</ul>
+
+<h3 id="xml-variacoes">Master, variantes e variation group em XML</h3>
+<script type="text/plain" class="src" data-lang="xml" data-file="impex/catalogs/apparel-master/catalog.xml (trecho)">
+<product product-id="CAM-BASICA">
+    <display-name xml:lang="x-default">Camiseta Básica</display-name>
+    <online-flag>true</online-flag>
+    <searchable-flag>true</searchable-flag>
+    <variations>
+        <attributes>
+            <variation-attribute attribute-id="color" variation-attribute-id="color">
+                <display-name xml:lang="x-default">Cor</display-name>
+                <variation-attribute-values>
+                    <variation-attribute-value value="AZUL"><display-value xml:lang="x-default">Azul</display-value></variation-attribute-value>
+                    <variation-attribute-value value="PRETO"><display-value xml:lang="x-default">Preto</display-value></variation-attribute-value>
+                </variation-attribute-values>
+            </variation-attribute>
+            <variation-attribute attribute-id="size" variation-attribute-id="size">
+                <display-name xml:lang="x-default">Tamanho</display-name>
+                <variation-attribute-values>
+                    <variation-attribute-value value="P"/>
+                    <variation-attribute-value value="M"/>
+                </variation-attribute-values>
+            </variation-attribute>
+        </attributes>
+        <variants>
+            <variant product-id="CAM-BASICA-AZUL-P" default="true"/>
+            <variant product-id="CAM-BASICA-AZUL-M"/>
+            <variant product-id="CAM-BASICA-PRETO-M"/>
+        </variants>
+        <variation-groups>
+            <variation-group product-id="CAM-BASICA-AZUL"/>
+        </variation-groups>
+    </variations>
+</product>
+
+<!-- cada variante é um <product> próprio com os valores dos atributos de variação -->
+<product product-id="CAM-BASICA-AZUL-M">
+    <online-flag>true</online-flag>
+    <custom-attributes>
+        <custom-attribute attribute-id="color">AZUL</custom-attribute>
+        <custom-attribute attribute-id="size">M</custom-attribute>
+    </custom-attributes>
+</product>
+</script>
+<aside class="callout" data-kind="verify">
+<p>O elemento <code>&lt;variation-groups&gt;</code> e os atributos de variação usados como <em>custom-attributes</em> nas variantes seguem o <code>catalog.xsd</code>. Antes de importar em massa, valide o arquivo contra o XSD (o próprio import do BM valida, e o b2c CLI traz os XSDs em <code>b2c docs schema catalog</code>). Atributos de variação precisam existir como atributos do system object <em>Product</em>.</p>
+</aside>
+
+<h3 id="api-tipos">Tratando tipos de produto no código</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/app_custom/cartridge/scripts/helpers/productTypeHelpers.js">
+'use strict';
+
+var ProductMgr = require('dw/catalog/ProductMgr');
+
+/**
+ * Resolve a variante escolhida a partir de um master e de valores de atributos.
+ * @param {string} masterId - ex.: 'CAM-BASICA'
+ * @param {Object} selection - ex.: { color: 'AZUL', size: 'M' }
+ * @returns {dw.catalog.Variant|null} null se a combinação não existir
+ */
+function resolveVariant(masterId, selection) {
+    var master = ProductMgr.getProduct(masterId);
+    if (!master || !master.isMaster()) return null;
+
+    var pvm = master.getVariationModel();
+    Object.keys(selection).forEach(function (attrId) {
+        var attr = pvm.getProductVariationAttribute(attrId);
+        if (!attr) return;
+        // procura o valor pelo ID entre os valores permitidos do atributo
+        var value = pvm.getAllValues(attr).toArray().filter(function (v) {
+            return v.ID === selection[attrId];
+        })[0];
+        if (value) pvm.setSelectedAttributeValue(attrId, value.ID);
+    });
+    return pvm.getSelectedVariant();
+}
+
+/** Descreve o tipo do produto para logs e decisões de UI. */
+function typeOf(product) {
+    if (product.isMaster()) return 'master';
+    if (product.isVariant()) return 'variant';
+    if (product.isVariationGroup()) return 'variationGroup';
+    if (product.isProductSet()) return 'set';
+    if (product.isBundle()) return 'bundle';
+    return 'standard';
+}
+
+module.exports = { resolveVariant: resolveVariant, typeOf: typeOf };
+</script>
+<p>No SFRA você raramente faz isso na mão. A <strong>product factory</strong> (<code>scripts/factories/product.js</code>) recebe <code>pid</code> e as variáveis da querystring, aplica a seleção no variation model e escolhe o model certo (full product, set, bundle, tile) com os decorators adequados:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="uso típico num controller SFRA">
+var ProductFactory = require('*/cartridge/scripts/factories/product');
+// req.querystring.variables vem da PDP: { color: { id: 'CAM-BASICA', value: 'AZUL' }, ... }
+var product = ProductFactory.get({ pid: req.querystring.pid, variables: req.querystring.variables });
+// product.productType: 'master' | 'variant' | 'set' | 'bundle' | 'standard' | ...
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="precos" data-k="cap. 5">
+<h2>Price books e resolução de preço</h2>
+<div class="prose">
+<p>Um price book tem uma moeda, uma flag online, um período de validade opcional e um <em>parent</em> opcional (o "Based On" do BM). Para valer num site, ele precisa estar <strong>atribuído</strong> a esse site. Dentro dele, cada produto tem uma ou mais <em>price tables</em>: preços por quantidade (o preço para quantidade 1 é obrigatório) e, opcionalmente, um período de validade.</p>
+
+<h3 id="lookup">As regras de lookup (dw.catalog.ProductPriceModel)</h3>
+<ol class="steps">
+  <li><strong>Price books candidatos:</strong> se o código registrou price books com <code>PriceBookMgr.setApplicablePriceBooks()</code>, só esses (e os seus pais) contam; eles precisam estar ativos, mas não precisam estar atribuídos ao site. Senão, contam todos os price books <strong>atribuídos ao site</strong>, ativos agora e na <strong>moeda da sessão</strong>.</li>
+  <li>Em cada price book, no máximo <strong>uma</strong> price table está ativa para o produto: a que contém a data atual e tem a data de início mais recente.</li>
+  <li>Entre as tabelas ativas, vale a de maior quantidade-limite que seja menor ou igual à quantidade pedida.</li>
+  <li>O sistema retorna o <strong>menor</strong> preço encontrado entre os price books candidatos. Se nenhum tem preço, retorna N/A (o produto não pode ser comprado).</li>
+  <li>O "Based On" (parent) é consultado <strong>só um nível acima</strong> durante o lookup, mesmo que a hierarquia seja mais profunda.</li>
+  <li>Uma variante sem preço aplicável <strong>cai no preço do master</strong>.</li>
+</ol>
+
+<aside class="callout" data-kind="verify">
+<p>A ajuda de merchandising (cenário "Valid Periods") afirma que, com dois price books de períodos sobrepostos atribuídos ao site, o de <em>Valid From</em> mais recente é o ativo. Já a regra de lookup do guia de desenvolvedor descreve a escolha do <strong>menor preço</strong> entre todos os price books aplicáveis. Na prova, prevalece a regra do desenvolvedor ("best price = lowest price"). Na dúvida num projeto real, teste com o Storefront Toolkit.</p>
+</aside>
+
+<h3 id="lista-venda">Preço "de/por" no SFRA: list price pelo price book raiz</h3>
+<p>O SFRA mostra o preço riscado ("de") comparando o preço de venda com o preço do <strong>price book raiz</strong> da cadeia de parents do price book que forneceu o preço de venda. O trecho real da factory de preço:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="app_storefront_base/cartridge/scripts/factories/price.js (trecho)">
+function getListPrice(priceModel) {
+    var price = money.NOT_AVAILABLE;
+    var priceBook;
+    var priceBookPrice;
+
+    if (priceModel.price.valueOrNull === null && priceModel.minPrice) {
+        return priceModel.minPrice;
+    }
+
+    // sobe pelos parents até o price book raiz (helpers/pricing.js#getRootPriceBook)
+    priceBook = priceHelper.getRootPriceBook(priceModel.priceInfo.priceBook);
+    priceBookPrice = priceModel.getPriceBookPrice(priceBook.ID);
+
+    if (priceBookPrice.available) {
+        return priceBookPrice;
+    }
+    price = priceModel.price.available ? priceModel.price : priceModel.minPrice;
+    return price;
+}
+</script>
+<p>A configuração que faz o preço "de/por" aparecer é esta:</p>
+<ol class="steps">
+  <li><code>brl-list-prices</code>: price book de lista, com todos os produtos.</li>
+  <li><code>brl-sale-prices</code>: price book de venda com <strong>parent = brl-list-prices</strong>, só com os produtos em oferta.</li>
+  <li>Os dois atribuídos ao site, online, em BRL.</li>
+  <li>Num produto em oferta, o menor preço vem do sale book; o raiz dele é o list book, então aparece "de 99,90 por 79,90". Num produto sem oferta, o preço vem do list book, o raiz é ele mesmo, os valores são iguais e o SFRA não mostra o riscado.</li>
+</ol>
+<p>Promoções de produto (<em>product promotions</em>) também entram: se uma promoção ativa dá um preço menor, a factory usa esse preço como venda (<code>priceHelper.getPromotionPrice</code>).</p>
+
+<h3 id="xml-precos">Price books em XML</h3>
+<script type="text/plain" class="src" data-lang="xml" data-file="impex/pricebooks/brl-pricebooks.xml">
+<?xml version="1.0" encoding="UTF-8"?>
+<pricebooks xmlns="http://www.demandware.com/xml/impex/pricebook/2006-10-31">
+    <pricebook>
+        <header pricebook-id="brl-list-prices">
+            <currency>BRL</currency>
+            <display-name xml:lang="x-default">Lista BRL</display-name>
+            <online-flag>true</online-flag>
+        </header>
+        <price-tables>
+            <price-table product-id="CAM-BASICA-AZUL-M">
+                <amount quantity="1">99.90</amount>
+            </price-table>
+            <!-- preço escalonado: a partir de 10 unidades, 8,50 cada -->
+            <price-table product-id="CANECA-01">
+                <amount quantity="1">10.00</amount>
+                <amount quantity="10">8.50</amount>
+            </price-table>
+        </price-tables>
+    </pricebook>
+
+    <pricebook>
+        <header pricebook-id="brl-sale-prices">
+            <currency>BRL</currency>
+            <display-name xml:lang="x-default">Oferta BRL</display-name>
+            <online-flag>true</online-flag>
+            <parent>brl-list-prices</parent>
+        </header>
+        <price-tables>
+            <price-table product-id="CAM-BASICA-AZUL-M">
+                <online-from>2026-11-20T00:00:00.000Z</online-from>
+                <online-to>2026-11-30T23:59:59.000Z</online-to>
+                <amount quantity="1">79.90</amount>
+            </price-table>
+        </price-tables>
+    </pricebook>
+</pricebooks>
+</script>
+
+<h3 id="api-precos">Lendo preços pela API</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/app_custom/cartridge/scripts/helpers/priceHelpers.js">
+'use strict';
+
+var ProductMgr = require('dw/catalog/ProductMgr');
+var Quantity = require('dw/value/Quantity');
+var PriceBookMgr = require('dw/catalog/PriceBookMgr');
+
+/**
+ * Preço efetivo (menor entre os price books aplicáveis) e a origem dele.
+ */
+function describePrice(pid, qty) {
+    var product = ProductMgr.getProduct(pid);
+    if (!product) return null;
+    var pm = product.getPriceModel();
+    var quantity = new Quantity(qty || 1, product.unit || '');
+    var price = pm.getPrice(quantity);             // dw.value.Money (Money.NOT_AVAILABLE se não houver)
+    var info = pm.getPriceInfo(quantity);          // dw.catalog.ProductPriceInfo
+    return {
+        available: price.available,
+        value: price.available ? price.value : null,
+        currency: price.currencyCode,
+        priceBook: info ? info.priceBook.ID : null,
+        isRange: product.isMaster() ? pm.isPriceRange() : false,
+        min: product.isMaster() ? pm.getMinPrice().value : null,
+        max: product.isMaster() ? pm.getMaxPrice().value : null
+    };
+}
+
+/**
+ * Exemplo: preço exclusivo para um canal (ex.: app). O price book precisa estar ativo,
+ * mas não precisa estar atribuído ao site. Vale só para o request atual.
+ */
+function useChannelPriceBook(priceBookId) {
+    var pb = PriceBookMgr.getPriceBook(priceBookId);
+    if (pb) {
+        PriceBookMgr.setApplicablePriceBooks(pb);
+    }
+}
+
+module.exports = { describePrice: describePrice, useChannelPriceBook: useChannelPriceBook };
+</script>
+<aside class="callout" data-kind="best">
+<p>Preço diferente para um segmento (VIP, B2B, funcionários) é <strong>configuração</strong>: um price book próprio ativado por uma campanha ou experiência para o customer group, ou por source code. Não escreva <code>price * 0.9</code> em template ou controller: isso quebra impostos, relatórios, OCAPI e o índice de busca.</p>
+</aside>
+
+<h3 id="indice-preco">Preço no índice de busca</h3>
+<p>Na busca e na PLP, por performance, o B2C Commerce usa o preço gravado no <strong>índice de produtos</strong>, não o do banco. Todos os preços de todos os price books entram no índice, e as regras de aplicabilidade são aplicadas na hora da consulta. Por isso a PLP pode mostrar um preço diferente da PDP até o índice ser reconstruído. Descontos de promoção não entram no índice.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="inventario" data-k="cap. 6">
+<h2>Inventory lists, records e ATS</h2>
+<div class="prose">
+<p>Cada site usa <strong>uma</strong> inventory list (uma mesma lista pode servir vários sites). A lista tem uma flag obrigatória, <code>default-instock</code>, que decide o que acontece com produtos <strong>sem registro</strong>: considerá-los disponíveis (<code>true</code>) ou não (<code>false</code>). Cada <em>inventory record</em> descreve um produto:</p>
+<table>
+<thead><tr><th>Campo</th><th>Significado</th></tr></thead>
+<tbody>
+<tr><td><code>allocation</code></td><td>Quantidade alocada para venda (normalmente o estoque informado pelo ERP ou WMS). Definir uma nova allocation "reinicia" a contagem a partir da data de reset.</td></tr>
+<tr><td><code>perpetual</code></td><td>Estoque infinito: sempre disponível (produto digital, sob encomenda).</td></tr>
+<tr><td><code>preorder-backorder-handling</code></td><td><code>none</code>, <code>preorder</code> (vender antes do lançamento) ou <code>backorder</code> (vender um produto que existe mas está em falta).</td></tr>
+<tr><td><code>preorder-backorder-allocation</code></td><td>Quantas unidades podem ser vendidas em pre-order ou backorder.</td></tr>
+<tr><td><code>in-stock-date</code></td><td>Data prevista de chegada; o SFRA mostra na mensagem de disponibilidade.</td></tr>
+<tr><td>turnover</td><td>Soma das transações de estoque (pedidos, reservas, cancelamentos) desde a data de reset da allocation.</td></tr>
+<tr><td>on order</td><td>Só com <em>On Order Inventory</em> ligado: o que foi pedido e ainda não exportado para o sistema de fulfillment.</td></tr>
+</tbody>
+</table>
+
+<h3 id="ats">Como o ATS é calculado</h3>
+<p>Pela documentação da classe <code>ProductInventoryRecord</code>:</p>
+<blockquote><p><strong>ATS = allocation + preorder/backorder allocation − turnover − on order</strong><br><strong>stock level = allocation − turnover</strong></p></blockquote>
+
+<script type="text/plain" class="mmd" data-caption="do registro ao status de disponibilidade">
+flowchart TB
+  REC["Inventory record<br/>allocation 100<br/>backorder allocation 20<br/>turnover 40"] --> SL["stock level = 60"]
+  REC --> ATS["ATS = 100 + 20 − 40 = 80"]
+  SL --> S{"getAvailabilityStatus()"}
+  ATS --> S
+  S -- "stock level ≥ 1" --> IN["IN_STOCK"]
+  S -- "sem stock, backorder com saldo" --> BO["BACKORDER"]
+  S -- "sem stock, preorder com saldo" --> PO["PREORDER"]
+  S -- "nada disponível" --> NA["NOT_AVAILABLE"]
+</script>
+
+<h3 id="orderable">isOrderable × isInStock</h3>
+<p>As duas perguntas são diferentes. <strong>Orderable</strong> considera o ATS (incluindo pre-order e backorder); <strong>in stock</strong> considera só o stock level. As regras oficiais para um produto simples:</p>
+<ul>
+  <li><code>isOrderable()</code>: online e (sem registro com <code>default-instock = true</code>, <em>ou</em> perpetual, <em>ou</em> ATS ≥ <code>minOrderQuantity</code>).</li>
+  <li><code>isInStock()</code>: (sem registro com <code>default-instock = true</code>, <em>ou</em> perpetual, <em>ou</em> stock level ≥ <code>minOrderQuantity</code>).</li>
+  <li>As versões com quantidade (<code>isOrderable(qty)</code> e <code>isInStock(qty)</code>) <strong>não</strong> consideram o <code>minOrderQuantity</code>.</li>
+  <li>Master e set: orderable se pelo menos uma variante ou item for. Bundle: o bundle <em>e</em> todos os itens.</li>
+</ul>
+
+<h3 id="reserva">Reserva e decremento no checkout</h3>
+<p>Para evitar overselling, o estoque é comprometido em transações de inventário ligadas ao pedido:</p>
+<ol class="steps">
+  <li><strong>Reserva antecipada (opcional):</strong> <code>basket.reserveInventory()</code> reserva os itens da cesta por um tempo limitado. A reserva tem transação própria (não pode ser chamada dentro de <code>Transaction.wrap</code>) e <strong>não pode ser usada no mesmo request</strong> que <code>OrderMgr.createOrder()</code>. Serve, por exemplo, para reservar ao entrar no checkout.</li>
+  <li><strong>Criação do pedido:</strong> <code>OrderMgr.createOrder(basket)</code> registra as transações de inventário do pedido. No SFRA isso acontece em <code>CheckoutServices-PlaceOrder</code>, via <code>COHelpers.createOrder</code>.</li>
+  <li><strong>Desfazer:</strong> <code>OrderMgr.failOrder(order, true)</code> (pedido que não chegou a ser colocado) e <code>OrderMgr.cancelOrder(order)</code> (pedido colocado) desfazem as transações de inventário e os resgates de cupom. Mudar o status com <code>Order.setStatus()</code> <strong>não</strong> mexe no estoque.</li>
+</ol>
+
+<h3 id="xml-inventario">Inventory list em XML</h3>
+<script type="text/plain" class="src" data-lang="xml" data-file="impex/inventory/inventory-br.xml">
+<?xml version="1.0" encoding="UTF-8"?>
+<inventory xmlns="http://www.demandware.com/xml/impex/inventory/2007-05-31">
+    <inventory-list>
+        <header list-id="inventory-br">
+            <default-instock>false</default-instock> <!-- sem registro = indisponível (recomendado) -->
+            <description>Estoque Brasil</description>
+        </header>
+        <records>
+            <record product-id="CAM-BASICA-AZUL-M">
+                <allocation>100</allocation>
+                <perpetual>false</perpetual>
+            </record>
+            <record product-id="CAM-BASICA-PRETO-M">
+                <allocation>0</allocation>
+                <perpetual>false</perpetual>
+                <preorder-backorder-handling>backorder</preorder-backorder-handling>
+                <preorder-backorder-allocation>20</preorder-backorder-allocation>
+                <in-stock-date>2026-12-05</in-stock-date>
+            </record>
+            <record product-id="GIFT-CARD-DIGITAL">
+                <perpetual>true</perpetual>
+            </record>
+        </records>
+    </inventory-list>
+</inventory>
+</script>
+<aside class="callout" data-kind="warn">
+<p>Inventário <strong>não é replicado</strong>. O feed de estoque precisa ser importado em Production e também em Staging (a documentação recomenda os dois), normalmente com o job step <code>ImportInventoryLists</code> agendado (veja o <a class="text-link" href="18-jobs.html">tema 18</a>). Prefira imports delta (só registros alterados) com frequência e um full periódico.</p>
+</aside>
+
+<h3 id="api-inventario">Disponibilidade pela API</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/app_custom/cartridge/scripts/helpers/availabilityHelpers.js">
+'use strict';
+
+var ProductMgr = require('dw/catalog/ProductMgr');
+var ProductAvailabilityModel = require('dw/catalog/ProductAvailabilityModel');
+
+/**
+ * Resumo de disponibilidade para uma quantidade.
+ * @param {string} pid
+ * @param {number} qty
+ */
+function describeAvailability(pid, qty) {
+    var product = ProductMgr.getProduct(pid);
+    var am = product.getAvailabilityModel();
+    var record = am.getInventoryRecord(); // null se o produto não tem registro na lista do site
+    var levels = am.getAvailabilityLevels(qty); // quantidades por status
+
+    return {
+        orderable: am.isOrderable(qty),
+        inStock: am.isInStock(qty),
+        status: am.getAvailabilityStatus(), // IN_STOCK | PREORDER | BACKORDER | NOT_AVAILABLE
+        isBackorder: am.getAvailabilityStatus() === ProductAvailabilityModel.AVAILABILITY_STATUS_BACKORDER,
+        ats: record ? record.getATS().value : null,
+        perpetual: record ? record.isPerpetual() : null,
+        inStockDate: record && record.getInStockDate() ? record.getInStockDate().toISOString() : null,
+        split: {
+            inStock: levels.inStock.value,
+            preorder: levels.preorder.value,
+            backorder: levels.backorder.value,
+            notAvailable: levels.notAvailable.value
+        }
+    };
+}
+
+module.exports = { describeAvailability: describeAvailability };
+</script>
+<p>No SFRA, o decorator <code>models/product/decorators/availability.js</code> usa <code>getAvailabilityLevels(quantidade)</code> para montar mensagens como "In Stock", "3 Item(s) in Stock" e "Back Order" a partir de <code>Resource.msg</code>, e define <code>product.available = isOrderable(quantidade)</code>. Para mudar o texto, edite as properties; para mudar a regra, estenda o decorator (<a class="text-link" href="06-estender-sfra.html">tema 06</a>).</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="juntando" data-k="cap. 7">
+<h2>Juntando tudo: a PDP do ponto de vista dos dados</h2>
+<div class="prose">
+<p>Quando o comprador abre <code>Product-Show?pid=CAM-BASICA</code>, o SFRA percorre todos os conceitos deste tema:</p>
+<script type="text/plain" class="mmd" data-caption="o que o SFRA consulta para montar uma PDP">
+sequenceDiagram
+  autonumber
+  participant C as Product-Show
+  participant F as ProductFactory
+  participant PM as ProductMgr
+  participant VM as VariationModel
+  participant PR as PriceModel
+  participant AM as AvailabilityModel
+  C->>F: get({ pid, variables })
+  F->>PM: getProduct('CAM-BASICA')
+  PM-->>F: master (online? no site catalog?)
+  F->>VM: aplica seleção (cor, tamanho)
+  VM-->>F: variante selecionada ou master
+  F->>PR: preço (faixa se master; de/por pelo price book raiz)
+  F->>AM: getAvailabilityLevels(qtd) → mensagens + available
+  F-->>C: model "fullProduct" com decorators
+  C->>C: res.render('product/productDetails')
+</script>
+<p>Quando algo sai errado na PDP, a pergunta é sempre "qual dessas camadas respondeu diferente do esperado?". As tabelas de troubleshooting a seguir seguem essa ordem.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Atribuir o master catalog ao site.</strong> O site recebe o storefront catalog; o master fica sem site e só "empresta" produtos por assignment.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Calcular desconto no template.</strong> Preço especial é price book; desconto é promoção. Código manual não aparece em relatórios, na OCAPI, no índice de busca nem no cálculo de impostos.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Percorrer a árvore de categorias inteira a cada request.</strong> Monte o menu num remote include cacheado (é o que o SFRA faz com o header).</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Adicionar o master ao carrinho.</strong> Ele não é orderable; o SFRA resolve a variante antes do <code>Cart-AddProduct</code>.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>"Mesmo produto em dois sites com navegações diferentes" → <strong>um master + dois storefront catalogs</strong>.</li>
+  <li>"Escolher itens de um look e comprar só alguns" → <strong>product set</strong>. "Kit com preço único" → <strong>bundle</strong>. "Garantia com preço adicional" → <strong>option</strong>. "Mostrar 'Camiseta Azul' como item na PLP" → <strong>variation group</strong>.</li>
+  <li>"Produto digital sempre disponível" → <strong>perpetual</strong>. "Vender antes do lançamento" → <strong>pre-order</strong>. "Vender em falta temporária" → <strong>backorder</strong>.</li>
+  <li>"Price book em USD num site com sessão em BRL" → <strong>ignorado</strong> (só a moeda da sessão conta).</li>
+  <li>"Preço escalonado por quantidade" → várias <code>&lt;amount quantity&gt;</code> na mesma price table.</li>
+  <li>"Por que a PLP mostra um preço e a PDP outro?" → a PLP usa o <strong>índice</strong>; reconstrua-o.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>Produto existe no BM mas não aparece na PLP ou na busca</td><td>Offline; sem assignment no storefront catalog; categoria offline; não searchable; não orderable com "Show Orderable Products Only"; índice desatualizado</td><td>Percorra o checklist de visibilidade do capítulo 2. Na aba <em>Categories</em> do produto, veja as atribuições; reconstrua o índice em <em>Merchant Tools &gt; Search &gt; Search Indexes</em>.</td></tr>
+<tr><td>Categoria nova não aparece no menu</td><td>Só no master; offline; sem <code>showInMenu</code>; sem produtos online; header em cache</td><td>Atribua no storefront catalog, marque <code>showInMenu</code> e invalide o cache.</td></tr>
+<tr><td>Preço N/A na PDP</td><td>Price book não atribuído ao site, offline, fora da validade, em outra moeda; sem preço para quantidade 1</td><td>Confira <em>Price Books &gt; Site Assignments</em>, a moeda e as datas. Teste com <code>priceModel.getPriceInfo()</code> num script de diagnóstico.</td></tr>
+<tr><td>Preço "de/por" não aparece</td><td>Sale book sem parent = list book; ou list e sale com o mesmo valor</td><td>Defina o parent do price book de venda; o SFRA busca o list price no price book raiz.</td></tr>
+<tr><td>PLP com preço diferente da PDP</td><td>A PLP usa o preço indexado</td><td>Reconstrua ou atualize o índice de produtos.</td></tr>
+<tr><td>"Esgotado" com estoque físico</td><td>Lista não atribuída ao site; produto sem registro com <code>default-instock = false</code>; allocation 0; import não rodou em Production</td><td>Confira a atribuição da lista ao site e o registro do produto em <em>Inventory Lists &gt; Records</em>. Rode o import.</td></tr>
+<tr><td>Add to Cart desabilitado na PDP</td><td>O master está selecionado; variante offline, sem preço ou sem ATS</td><td>Selecione todos os atributos de variação. Na aba Network, a resposta de <code>Cart-AddProduct</code> traz <code>error: true</code> e a mensagem.</td></tr>
+<tr><td>Variante não herda imagem ou atributo do master</td><td>A variante define o atributo (mesmo vazio); image groups sem a variação certa</td><td>Remova o valor da variante; configure image groups por view type e variação (ex.: color).</td></tr>
+<tr><td>Import de catálogo falha</td><td>XML fora do XSD; atributo de variação inexistente; ordem de dependências</td><td>Leia o log do import em <em>Administration &gt; Site Development &gt; Import &amp; Export</em> (ou o log do job); valide contra o XSD.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Diferenciar master e storefront catalog, posse e atribuição, primary e classification category.</li>
+  <li>Listar as condições para um produto aparecer na PLP e na busca.</li>
+  <li>Escolher o tipo de produto certo para cada cenário e conhecer as regras de preço, estoque e promoção de cada um.</li>
+  <li>Explicar o lookup de preço: price books atribuídos, moeda da sessão, validade, menor preço, parent com um nível, fallback para o master.</li>
+  <li>Configurar preço "de/por" no SFRA (sale book com parent = list book).</li>
+  <li>Explicar allocation, perpetual, pre-order, backorder, ATS, stock level e <code>default-instock</code>.</li>
+  <li>Diferenciar <code>isOrderable</code> de <code>isInStock</code> e saber quando o estoque é reservado e decrementado.</li>
+  <li>Escrever XML de catálogo, price book e inventário nos namespaces oficiais.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Uma marca tem um site Brasil e um site Outlet, com os mesmos produtos e navegações diferentes. Qual é a estrutura recomendada?</p>
+  <ol class="opts-l"><li>Dois master catalogs, um por site</li><li>Um master catalog e dois storefront catalogs, cada um atribuído a um site</li><li>Um único storefront catalog com categorias "outlet"</li><li>Atribuir o master aos dois sites</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O master possui os produtos e não vai para site nenhum; cada site tem o seu storefront catalog com as próprias categorias e assignments.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">O site tem dois price books BRL atribuídos e ativos. O produto custa 100 no primeiro e 90 no segundo. Qual preço a API retorna?</p>
+  <ol class="opts-l"><li>100, o do price book criado primeiro</li><li>90, o menor entre os aplicáveis</li><li>A média</li><li>Depende do price book padrão do site</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O lookup retorna o melhor (menor) preço entre os price books aplicáveis: atribuídos, ativos e na moeda da sessão.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">O que é preciso para o SFRA exibir "de R$ 99,90 por R$ 79,90"?</p>
+  <ol class="opts-l"><li>Uma promoção de percentual</li><li>Um price book de venda com parent = price book de lista, os dois atribuídos ao site</li><li>Um atributo custom <code>listPrice</code> no produto</li><li>Dois inventory lists</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> A factory de preço do SFRA busca o list price no price book raiz do price book que deu o preço de venda. Uma promoção de produto também reduz o preço de venda, mas a pergunta descreve a configuração de price books.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Um produto sem inventory record aparece como indisponível. Qual configuração explica isso?</p>
+  <ol class="opts-l"><li>O produto não é searchable</li><li>A inventory list tem <code>default-instock = false</code></li><li>O price book está offline</li><li>O produto é perpetual</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Sem registro, a disponibilidade é decidida pela flag <code>default-instock</code> da lista.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Allocation 50, turnover 45, backorder allocation 10. Qual é o ATS (sem On Order)?</p>
+  <ol class="opts-l"><li>5</li><li>15</li><li>60</li><li>50</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> ATS = 50 + 10 − 45 = 15. O stock level é 5; acima disso o produto vende como backorder até a cota.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual afirmação sobre product sets está correta?</p>
+  <ol class="opts-l"><li>O set tem preço próprio definido no price book</li><li>Um set pode conter produtos e outros sets, e cada item é comprado separadamente</li><li>Promoções se aplicam ao set como um todo</li><li>O set tem inventory record próprio</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O preço do set é a soma dos itens; o set não tem promoções nem registro de estoque; e pode conter outros sets.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">A PLP mostra R$ 89,90 e a PDP R$ 79,90 depois de um import de price book. O que fazer?</p>
+  <ol class="opts-l"><li>Limpar os cookies</li><li>Reconstruir ou atualizar o índice de produtos (a PLP usa preço indexado)</li><li>Reativar a code version</li><li>Replicar o price book para a sandbox</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> A busca usa preços do índice; a PDP lê o price model. Depois de mudanças de preço, atualize o índice e, se for o caso, o cache.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Um job cancela pedidos com <code>order.setStatus(Order.ORDER_STATUS_CANCELLED)</code>. O que acontece com o estoque?</p>
+  <ol class="opts-l"><li>Volta automaticamente</li><li>Nada: <code>setStatus</code> não mexe no estoque; use <code>OrderMgr.cancelOrder()</code></li><li>Vai para backorder</li><li>Fica reservado por 24h</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> A documentação de inventário avisa: mudar o status com <code>Order.setStatus()</code> não afeta o stock level. Cancelar pelo <code>OrderMgr.cancelOrder()</code> devolve o estoque.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_catalog_design.htm&amp;type=5">Catalog Design</a>: catálogo de produtos × de vitrine.</li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_product_types.htm&amp;type=5">Product Types and Variations</a>: tabelas de preço, estoque e promoção por tipo.</li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_product_sets.htm&amp;type=5">Product Sets</a> e <a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_product_bundles.htm&amp;type=5">Product Bundles</a></li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_pricing_and_price_books.htm&amp;type=5">Pricing and Price Books</a>: price tables, validade, Based On, indexação.</li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_price_books_for_developers.htm&amp;type=5">Price Books for Developers</a>: regras de lookup.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-inventory-for-developers.html">Customize Inventory Management</a>: isOrderable, isInStock, status, reservas.</li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/scriptapi/html/index.html?target=class_dw_catalog_ProductInventoryRecord.html">Script API: ProductInventoryRecord</a> (fórmula do ATS) e <a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/scriptapi/html/index.html?target=class_dw_catalog_ProductPriceModel.html">ProductPriceModel</a></li>
+  <li>XSDs oficiais <code>catalog.xsd</code>, <code>pricebook.xsd</code> e <code>inventory.xsd</code> (b2c CLI: <code>b2c docs schema &lt;nome&gt;</code>).</li>
+  <li>Código do SFRA: <code>scripts/factories/price.js</code>, <code>scripts/helpers/pricing.js</code>, <code>models/categories.js</code>, <code>models/product/decorators/availability.js</code>.</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

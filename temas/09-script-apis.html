@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>09 · B2C Commerce Script e APIs dw.* · Guia SFCC</title>
+<meta name="description" content="B2C Commerce Script e a Script API: pacotes dw.*, módulos, transações (Transaction.wrap, begin, commit, rollback), coleções e SeekableIterator, preferências de site e organização, sessão, Money e Quantity, erros e Status, e o padrão models, decorators, factories e helpers do SFRA.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="09" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>B2C Commerce Script e APIs dw.*</h1>
+  <p class="lead">Toda lógica de negócio do servidor (controllers, helpers, hooks, jobs, models) é escrita em <strong>B2C Commerce Script</strong>: JavaScript executado pelo motor da plataforma, com acesso à <strong>Script API</strong> (<code>dw.*</code>) para ler e gravar catálogo, cestas, pedidos, clientes, conteúdo e configuração. Este tema ensina a usar essa API com segurança: os pacotes principais, transações, coleções e iteradores, preferências, sessão, valores monetários, tratamento de erros, e como organizar o código em helpers e models reutilizáveis.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>B2C Commerce Script</dt><dd>JavaScript baseado no Rhino, rodando no application server, com extensões da plataforma. O dialeto depende do compatibility mode (ES5; parte do ES6+ a partir de 21.2 e 22.7; veja o <a class="text-link" href="01-arquitetura.html#compat">tema 01</a>).</dd>
+  <dt>Script API</dt><dd>As classes <code>dw.*</code> e o pacote <code>TopLevel</code> (<code>Object</code>, <code>Array</code>, <code>Error</code>, <code>require</code>, <code>empty()</code>…). Documentação de referência: <em>B2C Commerce Script API</em>.</dd>
+  <dt>.js × .ds</dt><dd><code>.ds</code> é a extensão histórica dos scripts usados em pipelines (com <code>importPackage</code> e anotações <code>@input</code>/<code>@output</code>). Código novo é <code>.js</code> com <code>require</code>.</dd>
+  <dt>Business object</dt><dd>Objeto persistente da plataforma (Product, Order, Profile, CustomObject…). Gravar nele exige transação.</dd>
+  <dt>Manager</dt><dd>Classe estática de entrada de um domínio: <code>ProductMgr</code>, <code>CatalogMgr</code>, <code>BasketMgr</code>, <code>OrderMgr</code>, <code>CustomerMgr</code>, <code>PromotionMgr</code>, <code>ContentMgr</code>, <code>CustomObjectMgr</code>, <code>ShippingMgr</code>, <code>PaymentMgr</code>…</dd>
+  <dt>Quota</dt><dd>Limite de uso de API por request (objetos criados, tamanho de coleções, chamadas). Detalhes no <a class="text-link" href="20-performance.html">tema 20</a>.</dd>
+</dl>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="pacotes" data-k="cap. 2">
+<h2>Mapa dos pacotes dw.*</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Pacote</th><th>Classes mais usadas</th><th>Para quê</th></tr></thead>
+<tbody>
+<tr><td><code>dw.catalog</code></td><td>ProductMgr, CatalogMgr, Product, Category, ProductSearchModel, PriceBookMgr, ProductInventoryMgr, StoreMgr</td><td>Catálogo, busca, preço, estoque, lojas</td></tr>
+<tr><td><code>dw.order</code></td><td>BasketMgr, Basket, OrderMgr, Order, ProductLineItem, ShippingMgr, PaymentMgr, TaxMgr, PaymentInstrument</td><td>Carrinho, pedidos, frete, pagamento, impostos</td></tr>
+<tr><td><code>dw.campaign</code></td><td>PromotionMgr, Promotion, Campaign, Coupon, SourceCodeGroup</td><td>Promoções</td></tr>
+<tr><td><code>dw.customer</code></td><td>CustomerMgr, Customer, Profile, AddressBook, CustomerGroup</td><td>Clientes, login, perfis</td></tr>
+<tr><td><code>dw.content</code></td><td>ContentMgr, Content, Folder, ContentSearchModel, MarkupText</td><td>Content assets e folders</td></tr>
+<tr><td><code>dw.experience</code></td><td>PageMgr, Page, Component</td><td>Page Designer</td></tr>
+<tr><td><code>dw.system</code></td><td>Site, System, Transaction, Logger, Status, HookMgr, Request, Session</td><td>Infraestrutura</td></tr>
+<tr><td><code>dw.object</code></td><td>CustomObjectMgr, CustomObject, SystemObjectMgr, CustomAttributes</td><td>Custom objects e metadados</td></tr>
+<tr><td><code>dw.util</code></td><td>ArrayList, HashMap, Collection, Iterator, SeekableIterator, Calendar, StringUtils, Template, UUIDUtils</td><td>Utilitários e coleções</td></tr>
+<tr><td><code>dw.value</code></td><td>Money, Quantity</td><td>Valores com moeda e unidade</td></tr>
+<tr><td><code>dw.web</code></td><td>URLUtils, Resource, Forms, CSRFProtection, Cookie</td><td>URLs, textos, forms</td></tr>
+<tr><td><code>dw.svc</code></td><td>LocalServiceRegistry, Service, Result</td><td>Service Framework (integrações)</td></tr>
+<tr><td><code>dw.net</code></td><td>HTTPClient, SFTPClient, FTPClient, Mail, WebDAVClient</td><td>Rede e e-mail</td></tr>
+<tr><td><code>dw.io</code></td><td>File, FileReader, FileWriter, XMLStreamReader/Writer, CSVStreamReader/Writer</td><td>Arquivos na área IMPEX e feeds</td></tr>
+<tr><td><code>dw.crypto</code></td><td>Cipher, MessageDigest, Mac, Encoding, SecureRandom, KeyRef</td><td>Criptografia e assinatura</td></tr>
+<tr><td><code>dw.job</code></td><td>JobExecution, JobStepExecution</td><td>Contexto de jobs</td></tr>
+<tr><td><code>dw.template</code></td><td>ISML, Velocity</td><td>Renderização programática</td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="src" data-lang="js" data-file="formas de importar">
+// uma classe (recomendado)
+var ProductMgr = require('dw/catalog/ProductMgr');
+// um pacote inteiro (acesso via propriedade)
+var util = require('dw/util');
+var list = new util.ArrayList();
+// global ainda disponível, mas evite: dependência implícita e difícil de testar
+var p = dw.catalog.ProductMgr.getProduct('X');
+// importPackage / importScript: legado de pipelines (.ds); não use em código novo
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="transacoes" data-k="cap. 3">
+<h2>Transações</h2>
+<div class="prose">
+<p>Pela documentação de <code>dw.system.Transaction</code>, uma transação fornece o contexto para mudanças atômicas em <strong>business objects persistentes</strong>. Antes de criar, alterar ou apagar um objeto, é preciso iniciar uma transação; as mudanças só se tornam definitivas no commit, e um rollback devolve os objetos ao estado anterior. Leituras não precisam de transação.</p>
+<table>
+<thead><tr><th>Forma</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td><code>Transaction.wrap(fn)</code></td><td>Executa <code>fn</code> entre begin e commit. Se o commit falhar, faz rollback e lança exceção. Retorna o retorno de <code>fn</code>. É a forma preferida.</td></tr>
+<tr><td><code>Transaction.begin()</code> / <code>commit()</code> / <code>rollback()</code></td><td>Controle manual (ex.: decidir rollback por regra de negócio). Aninhamentos precisam de commits simétricos.</td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/app_custom_acme/cartridge/scripts/helpers/wishlistCounter.js">
+'use strict';
+
+var Transaction = require('dw/system/Transaction');
+var CustomObjectMgr = require('dw/object/CustomObjectMgr');
+
+/**
+ * Incrementa um contador por produto (custom object "ProductCounter", chave = pid).
+ * Leitura fora da transação; escrita dentro de Transaction.wrap.
+ * @returns {number} novo valor
+ */
+function increment(pid) {
+    return Transaction.wrap(function () {
+        var co = CustomObjectMgr.getCustomObject('ProductCounter', pid)
+            || CustomObjectMgr.createCustomObject('ProductCounter', pid);
+        co.custom.count = (co.custom.count || 0) + 1;
+        return co.custom.count; // o retorno de wrap é o retorno do callback
+    });
+}
+
+/**
+ * Controle manual: grava tudo ou nada, decidindo por regra.
+ * Atenção: Product é somente leitura em requests de storefront (quota object.ProductPO.readonly@SF),
+ * então esta função só pode ser chamada a partir de um job ou de um contexto de BM.
+ */
+function applyBulk(updates) {
+    var ProductMgr = require('dw/catalog/ProductMgr');
+    Transaction.begin();
+    try {
+        updates.forEach(function (u) {
+            var p = ProductMgr.getProduct(u.pid);
+            if (!p) throw new Error('produto inexistente: ' + u.pid);
+            p.custom.badge = u.badge;
+        });
+        Transaction.commit();
+        return true;
+    } catch (e) {
+        Transaction.rollback();
+        require('dw/system/Logger').getLogger('bulk').error('rollback: {0}', e.message);
+        return false;
+    }
+}
+
+module.exports = { increment: increment, applyBulk: applyBulk };
+</script>
+
+<h3 id="limites-transacao">Iteração e limites de transação</h3>
+<p>O guia <em>Understanding Server-Side JavaScript</em> descreve dois métodos para atualizar muitos objetos:</p>
+<ol class="steps">
+  <li><strong>Uma transação por objeto</strong> (recomendado): busque e atualize cada objeto em transação própria. Mais robusto; uma falha afeta só aquele objeto.</li>
+  <li><strong>Tudo numa transação</strong>: só para poucos objetos e quando precisa ser "tudo ou nada". A transação pode ficar grande demais (limite de tamanho, muitos recursos) e o commit pode falhar por concorrência, e então nada é gravado.</li>
+</ol>
+<p>Leia o objeto na mesma transação que o altera; caso contrário, a plataforma recusa a gravação de dados velhos (<em>stale</em>). Em jobs, o modelo <em>chunk-oriented</em> faz isso por você: uma transação por chunk (<a class="text-link" href="18-jobs.html">tema 18</a>).</p>
+<aside class="callout" data-kind="warn">
+<p>Nem todo objeto pode ser gravado em qualquer contexto. Pelas <em>Object Quotas</em> oficiais, são <strong>somente leitura em requests de storefront</strong>: produtos, catálogos, categorias, price books, inventory lists, promoções, campanhas, conteúdo, site e organization preferences, shipping methods, stores e <strong>custom objects replicáveis</strong>, entre outros. No storefront se grava em basket, order, customer/profile e em custom objects <em>não replicáveis</em>. O resto é atualizado por jobs, imports ou BM.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>Alterou um business object fora de transação → exceção.</li>
+  <li><code>Transaction.wrap</code> devolve o retorno do callback e faz rollback automático se o commit falhar.</li>
+  <li>Algumas APIs controlam a própria transação e <strong>não podem</strong> ser chamadas dentro de uma (ex.: <code>Basket.reserveInventory()</code>).</li>
+  <li>Nos hooks de OCAPI/SCAPI, a plataforma já abre a transação: não abra outra.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="colecoes" data-k="cap. 4">
+<h2>Coleções e iteradores</h2>
+<div class="prose">
+<p>As APIs devolvem coleções da plataforma (<code>dw.util.Collection</code>, <code>List</code>, <code>Map</code>, <code>Iterator</code>), que se comportam como objetos Java, não como arrays JavaScript. Os jeitos de percorrê-las:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="percorrendo coleções">
+var collections = require('*/cartridge/scripts/util/collections'); // util do SFRA
+var lineItems = basket.getProductLineItems(); // dw.util.Collection
+
+// 1) helpers do SFRA (map, forEach, find, reduce, first, every, pluck, concat)
+var skus = collections.map(lineItems, function (li) { return li.productID; });
+
+// 2) iterator explícito
+var it = lineItems.iterator();
+while (it.hasNext()) {
+    var li = it.next();
+}
+
+// 3) converter para array e usar os métodos de Array
+lineItems.toArray().forEach(function (li) { /* ... */ });
+
+// 4) for...of (compatibility mode 21.2 ou maior) e "for each" (extensão Rhino, legado)
+for (var item of lineItems) { /* ... */ }
+
+// coleções próprias
+var ArrayList = require('dw/util/ArrayList');
+var HashMap = require('dw/util/HashMap');
+var list = new ArrayList();  list.add('a');
+var map = new HashMap();     map.put('k', 1);
+</script>
+
+<h3 id="seekable">SeekableIterator: sempre feche</h3>
+<p>Consultas que podem trazer muitos registros (<code>CustomObjectMgr.queryCustomObjects</code>, <code>getAllCustomObjects</code>, <code>ProductMgr.queryAllSiteProducts</code>, <code>OrderMgr.searchOrders</code>, <code>CustomerMgr.searchProfiles</code>) devolvem um <code>dw.util.SeekableIterator</code>, que mantém recursos abertos no servidor. Feche-o sempre, de preferência num <code>finally</code>:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/int_erp/cartridge/scripts/helpers/pendingExports.js">
+'use strict';
+
+var OrderMgr = require('dw/order/OrderMgr');
+var Order = require('dw/order/Order');
+
+/** Conta e lista (no máximo n) pedidos prontos para exportar. */
+function readyForExport(n) {
+    var it = OrderMgr.searchOrders(
+        'exportStatus = {0} AND status != {1}',  // consulta com placeholders
+        'creationDate asc',
+        Order.EXPORT_STATUS_READY,
+        Order.ORDER_STATUS_FAILED
+    );
+    try {
+        var total = it.getCount();               // total sem percorrer tudo
+        var page = it.asList(0, n).toArray();    // só a página necessária
+        return { total: total, orders: page.map(function (o) { return o.orderNo; }) };
+    } finally {
+        it.close();                              // libera o recurso mesmo em caso de erro
+    }
+}
+
+module.exports = { readyForExport: readyForExport };
+</script>
+<aside class="callout" data-kind="warn">
+<p>O guia também alerta para <strong>não reutilizar o mesmo iterador</strong> depois de consumido: ele chega ao fim e passa a gerar <em>"Iterator is invalid"</em> e resultados inconsistentes. Refaça a consulta para obter um iterador novo.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="site-sessao" data-k="cap. 5">
+<h2>Site, preferências, request e sessão</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Precisa de</th><th>API</th></tr></thead>
+<tbody>
+<tr><td>Site atual, ID, moeda padrão</td><td><code>Site.getCurrent()</code> → <code>getID()</code>, <code>getDefaultCurrency()</code>, <code>getAllowedLocales()</code></td></tr>
+<tr><td>Preferência custom de site</td><td><code>Site.getCurrent().getCustomPreferenceValue('id')</code></td></tr>
+<tr><td>Preferência custom de organização (global)</td><td><code>require('dw/system/System').getPreferences().getCustom().id</code></td></tr>
+<tr><td>Tipo de instância</td><td><code>System.getInstanceType()</code></td></tr>
+<tr><td>Locale e moeda do request</td><td><code>request.locale</code>, <code>session.currency</code> (no SFRA: <code>req.locale</code>)</td></tr>
+<tr><td>Estado por sessão</td><td><code>session.custom.x</code> (dura a sessão inteira) e <code>session.privacy.x</code> (apagado no logout); no SFRA, <code>req.session.privacyCache</code></td></tr>
+<tr><td>Comprador atual</td><td><code>customer</code> (global) ou <code>req.currentCustomer.raw</code>; <code>customer.authenticated</code>, <code>customer.profile</code></td></tr>
+<tr><td>Textos localizados</td><td><code>Resource.msg('chave', 'arquivo', 'padrão')</code>, <code>Resource.msgf(chave, arquivo, padrão, args…)</code></td></tr>
+<tr><td>URLs</td><td><code>URLUtils.url('Controller-Rota', 'p', v)</code>, <code>https()</code>, <code>abs()</code>, <code>staticURL('/img/x.png')</code>, <code>home()</code></td></tr>
+</tbody>
+</table>
+<aside class="callout" data-kind="note">
+<p>Um script não guarda estado entre execuções: todas as variáveis são descartadas no fim do request. Para persistir, a documentação lista sessão, business objects persistentes e cookies. Valores guardados na sessão precisam ser de tipos suportados (primitivos); desde o compatibility mode 19.10, tipos não suportados geram exceção.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="valores" data-k="cap. 6">
+<h2>Money, Quantity e formatação</h2>
+<div class="prose">
+<p>Preços e totais são <code>dw.value.Money</code> (valor + moeda), nunca <code>Number</code> soltos. Isso evita somar BRL com USD e mantém o arredondamento da plataforma.</p>
+<script type="text/plain" class="src" data-lang="js" data-file="operações com Money">
+var Money = require('dw/value/Money');
+var StringUtils = require('dw/util/StringUtils');
+
+var preco = new Money(99.9, 'BRL');
+var frete = new Money(15, 'BRL');
+
+var total = preco.add(frete);                 // 114.90 BRL (Money é imutável: retorna um novo)
+var comDesconto = total.subtractPercent(10);  // 103.41 BRL
+var parcela = comDesconto.divide(3);          // 34.47 BRL
+var texto = StringUtils.formatMoney(parcela); // formatado conforme o locale do request
+
+if (!Money.NOT_AVAILABLE.available) { /* N/A: preço ausente */ }
+var mesmaMoeda = preco.isOfSameCurrency(frete); // true
+</script>
+<p><code>dw.value.Quantity</code> carrega valor e unidade (usado em <code>getPrice(quantity)</code>, nas quantidades de line items e no ATS). Datas usam <code>dw.util.Calendar</code> e <code>StringUtils.formatCalendar(cal, 'yyyy-MM-dd')</code>; o fuso padrão é o da instância (<code>System.getInstanceTimeZone()</code>), e o do site está em <code>Site.getCurrent().getTimezone()</code>.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="erros" data-k="cap. 7">
+<h2>Erros, exceções e Status</h2>
+<div class="prose">
+<p>Além dos erros padrão do ECMAScript (<code>TypeError</code>, <code>ReferenceError</code>…), a plataforma mapeia exceções Java para classes próprias: <code>IOError</code> (I/O, incluindo SOAP), <code>Fault</code> (RPC), <code>XMLStreamError</code>, <code>SystemError</code> (o resto) e <code>APIException</code> (erros de API com <code>type</code>, como <code>CreateOrderException</code>). Erros Java como <code>OutOfMemoryError</code> não podem ser capturados.</p>
+<script type="text/plain" class="src" data-lang="js" data-file="padrões de tratamento">
+// catch condicional (extensão Mozilla/Rhino suportada pelo motor)
+try {
+    var order = OrderMgr.createOrder(basket);
+} catch (e if e instanceof APIException && e.type === 'CreateOrderException') {
+    // ex.: basket inválida, estoque insuficiente
+}
+
+// alternativa portável (funciona em qualquer linter/IDE)
+try {
+    readFeed();
+} catch (e) {
+    if (e instanceof IOError) {
+        Logger.error('I/O ao ler o feed: {0}', e.message);
+    } else {
+        throw e; // não engula erros que você não sabe tratar
+    }
+}
+</script>
+<p><code>dw.system.Status</code> é o retorno padrão de muitas APIs e hooks: <code>Status.OK</code> ou <code>Status.ERROR</code>, com código, mensagem e detalhes.</p>
+<script type="text/plain" class="src" data-lang="js" data-file="usando Status">
+var Status = require('dw/system/Status');
+
+function validateZip(zip) {
+    if (!/^\d{5}-?\d{3}$/.test(zip)) {
+        return new Status(Status.ERROR, 'INVALID_ZIP', 'CEP inválido');
+    }
+    return new Status(Status.OK);
+}
+
+var s = validateZip('0100-000');
+if (s.error) {
+    // s.code === 'INVALID_ZIP', s.message === 'CEP inválido'
+}
+</script>
+<p>O timeout padrão de script é de 30 segundos (guia de boas práticas). Chamadas HTTP feitas pelo script herdam esse teto, e é por isso que integrações usam os timeouts do Service Framework (<a class="text-link" href="19-integracoes.html">tema 19</a>).</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="organizacao" data-k="cap. 8">
+<h2>Organizando a lógica: helpers, models, decorators e factories</h2>
+<div class="prose">
+<p>O SFRA define onde cada tipo de código mora. Seguir esse padrão é o que torna a lógica reutilizável e testável:</p>
+<table>
+<thead><tr><th>Camada</th><th>Responsabilidade</th><th>Exemplo</th></tr></thead>
+<tbody>
+<tr><td>Controller</td><td>Orquestra o request: entrada, chamadas e resposta</td><td><code>controllers/Store.js</code></td></tr>
+<tr><td>Helper (<code>scripts/helpers</code>)</td><td>Regra de negócio sem estado, reutilizável por controllers, jobs e hooks</td><td><code>storeHelpers.js</code></td></tr>
+<tr><td>Model (<code>models/</code>)</td><td>Converte objetos da API em JSON para a view</td><td><code>models/store.js</code></td></tr>
+<tr><td>Decorator</td><td>Acrescenta um grupo de propriedades a um model</td><td><code>models/product/decorators/price.js</code></td></tr>
+<tr><td>Factory</td><td>Escolhe e monta o model certo para o contexto</td><td><code>scripts/factories/product.js</code> (tile, full, set, bundle, line item)</td></tr>
+<tr><td>Service</td><td>Encapsula uma integração externa</td><td><code>scripts/services/erpService.js</code></td></tr>
+</tbody>
+</table>
+
+<h3 id="exemplo-camadas">Exemplo completo: "lojas próximas com estoque"</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/scripts/helpers/pickupHelpers.js">
+'use strict';
+
+var StoreMgr = require('dw/catalog/StoreMgr');
+var ProductInventoryMgr = require('dw/catalog/ProductInventoryMgr');
+
+/**
+ * Lojas num raio, com a quantidade disponível do produto em cada uma.
+ * Regra de negócio pura: sem req/res, testável com mocks.
+ * @param {string} pid
+ * @param {string} postalCode
+ * @param {string} countryCode
+ * @param {number} radiusKm
+ * @returns {Array<{store: dw.catalog.Store, ats: number, distance: number}>}
+ */
+function storesWithStock(pid, postalCode, countryCode, radiusKm) {
+    var result = [];
+    var stores = StoreMgr.searchStoresByPostalCode(countryCode, postalCode, 'km', radiusKm); // LinkedHashMap store → distância
+    var it = stores.keySet().iterator();
+    while (it.hasNext()) {
+        var store = it.next();
+        var list = store.inventoryListID ? ProductInventoryMgr.getInventoryList(store.inventoryListID) : null;
+        var record = list ? list.getRecord(pid) : null;
+        var ats = record ? record.getATS().value : 0;
+        if (ats > 0) {
+            result.push({ store: store, ats: ats, distance: stores.get(store) });
+        }
+    }
+    return result;
+}
+
+module.exports = { storesWithStock: storesWithStock };
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/models/pickupStore.js">
+'use strict';
+
+var URLUtils = require('dw/web/URLUtils');
+
+/**
+ * Model: transforma {store, ats, distance} em JSON seguro para a view.
+ * @constructor
+ */
+function PickupStore(entry) {
+    this.id = entry.store.ID;
+    this.name = entry.store.name;
+    this.address = [entry.store.address1, entry.store.city].filter(Boolean).join(', ');
+    this.distanceKm = Math.round(entry.distance * 10) / 10;
+    this.available = entry.ats;
+    this.selectUrl = URLUtils.url('Pickup-Select', 'storeId', entry.store.ID).toString();
+}
+
+module.exports = PickupStore;
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/Pickup.js">
+'use strict';
+
+var server = require('server');
+
+server.get('Stores', function (req, res, next) {
+    var pickupHelpers = require('*/cartridge/scripts/helpers/pickupHelpers');
+    var PickupStore = require('*/cartridge/models/pickupStore');
+    var q = req.querystring;
+    var entries = pickupHelpers.storesWithStock(q.pid, q.postalCode, req.geolocation.countryCode || 'BR', 30);
+    res.json({ stores: entries.map(function (e) { return new PickupStore(e); }) });
+    next();
+});
+
+module.exports = server.exports();
+</script>
+<aside class="callout" data-kind="note">
+<p><code>StoreMgr.searchStoresByPostalCode(countryCode, postalCode, distanceUnit, maxDistance)</code> devolve um <code>LinkedHashMap</code> de loja para distância, ordenado da mais próxima para a mais distante. O centro da busca vem das <em>geolocations</em> cadastradas na instância: sem uma geolocation para aquele CEP, o mapa volta vazio. <code>Store.inventoryListID</code> fica vazio se a loja não tiver uma inventory list atribuída.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="praticas" data-k="cap. 9">
+<h2>Boas práticas da Script API</h2>
+<div class="prose">
+<ul>
+  <li><strong>Busca via índice</strong> (<code>ProductSearchModel</code>) no storefront; <code>queryAllSiteProducts</code> só em jobs.</li>
+  <li><strong>Evite chamadas de API dentro de loops grandes</strong>; prefira APIs que devolvem coleções e pagine (<code>asList(start, size)</code>).</li>
+  <li><strong>Feche os SeekableIterators</strong>.</li>
+  <li><strong>Transações curtas</strong>, só para escrita.</li>
+  <li><strong><code>require</code> preguiçoso</strong> dentro das funções.</li>
+  <li><strong>Nada de estado global</strong> (variáveis de módulo mutáveis): cada request é isolado, e o comportamento de cache de módulos não é contrato.</li>
+  <li><strong>Configuração fora do código</strong>: preferências, Service Credentials, custom objects de configuração.</li>
+  <li><strong>Log com categoria</strong> e sem dados sensíveis (<a class="text-link" href="21-troubleshooting.html">tema 21</a>).</li>
+  <li><strong>Prefira a API a pipelets</strong>, e <code>require</code> a <code>importPackage</code>.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Gravar fora de transação</strong> (<code>product.custom.x = 1</code> sem <code>Transaction.wrap</code>): exceção.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Uma transação gigante</strong> num loop de milhares de objetos: risco de estourar o tamanho e de falhar por concorrência. Use uma transação por objeto ou um job chunk-oriented.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Não fechar o <code>SeekableIterator</code></strong>, ou convertê-lo inteiro em lista sem paginar.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Somar <code>Number</code> para valores monetários</strong> em vez de <code>Money</code>: erros de arredondamento e mistura de moedas.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>"Qual API para escrever com rollback automático?" → <code>Transaction.wrap</code>.</li>
+  <li>"Ler uma preferência custom do site" → <code>Site.getCurrent().getCustomPreferenceValue('id')</code>.</li>
+  <li>"Ler uma preferência global" → <code>System.getPreferences().getCustom()</code>.</li>
+  <li>"Dados da sessão apagados no logout" → <code>session.privacy</code> (SFRA: <code>privacyCache</code>).</li>
+  <li>"Iterador de consulta grande" → <code>SeekableIterator</code>, que precisa de <code>close()</code>.</li>
+  <li>"Timeout padrão de script" → 30 segundos.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>Erro ao alterar um objeto: "not in a transaction"</td><td>Escrita fora de transação</td><td>Envolva em <code>Transaction.wrap</code>.</td></tr>
+<tr><td>Commit falha por dados velhos</td><td>Objeto lido em outra transação</td><td>Releia o objeto dentro da transação que o altera.</td></tr>
+<tr><td>"Iterator is invalid" no log</td><td>Iterador reutilizado depois de consumido</td><td>Refaça a consulta.</td></tr>
+<tr><td>Quota violation (ex.: objetos por request)</td><td>Loop criando objetos ou coleções enormes</td><td>Pagine, use o índice, mova para um job. Veja <em>Quota Status</em> no BM.</td></tr>
+<tr><td><code>ReferenceError: "x" is not defined</code></td><td>Variável global ausente; palavra reservada do ES6 usada como identificador no 21.2+</td><td><code>require</code> explícito; renomeie (<code>class</code>, <code>import</code>…).</td></tr>
+<tr><td>Script interrompido por timeout</td><td>Loop pesado ou chamada externa lenta</td><td>Otimize; timeouts de serviço; processe em job.</td></tr>
+<tr><td>Valor monetário estranho (0.30000000000000004)</td><td>Aritmética com Number</td><td>Use <code>Money</code>.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Reconhecer os pacotes <code>dw.*</code> principais e os managers de cada domínio.</li>
+  <li>Importar com <code>require</code> e evitar globais, <code>importPackage</code> e pipelets.</li>
+  <li>Usar <code>Transaction.wrap</code>, <code>begin</code>/<code>commit</code>/<code>rollback</code> e escolher a estratégia de transação em loops.</li>
+  <li>Percorrer coleções (iterator, <code>toArray</code>, utilitário do SFRA) e fechar <code>SeekableIterator</code>.</li>
+  <li>Ler preferências de site e de organização, sessão e locale.</li>
+  <li>Calcular com <code>Money</code> e <code>Quantity</code> e formatar com <code>StringUtils</code>.</li>
+  <li>Tratar erros (tipos da plataforma, <code>APIException</code>, <code>Status</code>).</li>
+  <li>Organizar a lógica em helper, model, decorator, factory e service.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Qual destes trechos grava corretamente um atributo custom de um produto?</p>
+  <ol class="opts-l"><li><code>product.custom.badge = 'novo';</code></li><li><code>Transaction.wrap(function () { product.custom.badge = 'novo'; });</code></li><li><code>Transaction.begin(); product.custom.badge = 'novo';</code></li><li><code>ProductMgr.save(product)</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Escritas exigem transação. A opção c nunca faz commit.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Um job atualiza 50 mil custom objects. Qual estratégia o guia oficial recomenda?</p>
+  <ol class="opts-l"><li>Uma única transação para todos</li><li>Atualizar cada objeto na sua própria transação (ou usar um step chunk-oriented)</li><li>Sem transação</li><li>Uma transação por request HTTP</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Uma transação gigante pode exceder o tamanho permitido e falhar por concorrência, sem gravar nada.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">O que fazer com o retorno de <code>CustomObjectMgr.queryCustomObjects(...)</code> depois de usá-lo?</p>
+  <ol class="opts-l"><li>Nada</li><li>Chamar <code>close()</code></li><li>Chamar <code>commit()</code></li><li>Atribuir <code>null</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> É um <code>SeekableIterator</code>; feche-o, de preferência num <code>finally</code>.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Como ler uma preferência custom <code>enableGiftWrap</code> do site atual?</p>
+  <ol class="opts-l"><li><code>System.getPreferences().getCustom().enableGiftWrap</code></li><li><code>Site.getCurrent().getCustomPreferenceValue('enableGiftWrap')</code></li><li><code>session.custom.enableGiftWrap</code></li><li><code>Resource.msg('enableGiftWrap')</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> A opção a lê preferências de organização (globais).</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Onde guardar um dado do comprador que precisa sumir quando ele faz logout?</p>
+  <ol class="opts-l"><li><code>session.custom</code></li><li><code>session.privacy</code> (SFRA: <code>req.session.privacyCache</code>)</li><li>Variável global do módulo</li><li>Cookie sem expiração</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Os atributos de privacidade da sessão são limpos no logout; os custom duram a sessão inteira.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Por que preferir <code>dw.value.Money</code> a números para valores?</p>
+  <ol class="opts-l"><li>É mais rápido</li><li>Carrega a moeda, impede misturar moedas e mantém o arredondamento da plataforma</li><li>É obrigatório no ISML</li><li>Serializa melhor</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Operações como <code>add</code> e <code>subtractPercent</code> devolvem novos <code>Money</code> na mesma moeda.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/scriptapi/html/index.html">B2C Commerce Script API</a> (Transaction, SeekableIterator, Money, Site, System, StringUtils).</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/understandingserversidejavascript.html">Understanding Server-Side JavaScript</a>: iteração, limites de transação, erros, estado, escopo.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/usingjavascriptmodules.html">Script Modules</a></li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-dev-best-practices.html">Development Best Practices</a>: limites (template 10 MB, Page Designer 3 MB, e-mail 3 MB), quotas, timeout de 30 s.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-compatibility-mode-considerations.html">Compatibility Mode Changes</a></li>
+  <li>Código do SFRA: <code>scripts/util/collections.js</code>, <code>scripts/factories/product.js</code>, <code>models/product/*</code>.</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

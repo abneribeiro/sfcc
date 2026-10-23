@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>20 · Performance e escalabilidade · Guia SFCC</title>
+<meta name="description" content="Performance no B2C Commerce: page cache (iscache, middleware de cache do SFRA, varyby price_promotion), remote × local includes, invalidação e partições, URL diversity, custom caches (CacheMgr, caches.json), APIs friendly ao índice de busca (ProductSearchModel), quotas, transações, on-request, front-end e job load factor.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="20" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Performance e escalabilidade</h1>
+  <p class="lead">No B2C Commerce, performance depende de três coisas: <strong>servir o máximo possível do cache</strong> (page cache no web tier e custom caches no app server), <strong>usar o índice de busca em vez de percorrer o banco</strong>, e <strong>respeitar as quotas</strong> que a plataforma impõe para proteger o ambiente compartilhado. Este tema mostra como configurar cada uma e como reconhecer o código que destrói a escalabilidade.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>Page cache</dt><dd>Cache de HTML no <strong>web adapter</strong> (camada web). Num cache hit, o controller e os templates <em>nem executam</em>. A chave é a URL completa, mais o contexto de preço e promoção quando a página é personalizada.</dd>
+  <dt>Static cache</dt><dd>Cache de imagens, CSS e JS. Em produção, o TTL mínimo é 24 h.</dd>
+  <dt>Remote include</dt><dd><code>&lt;isinclude url="…"/&gt;</code>: um fragmento buscado pelo web adapter numa requisição separada, com <strong>cache próprio</strong>. É assim que se misturam partes estáticas e dinâmicas na mesma página.</dd>
+  <dt>Local include</dt><dd><code>&lt;isinclude template="…"/&gt;</code>: renderizado no mesmo processamento e no mesmo cache da página, que fica com a <strong>menor</strong> duração entre os templates incluídos.</dd>
+  <dt>Custom cache</dt><dd>Cache em memória do app server (<code>dw.system.CacheMgr</code>), definido em <code>caches.json</code>, para dados caros de calcular.</dd>
+  <dt>Quota</dt><dd>Limite imposto pela plataforma a APIs, objetos e tamanhos. Quotas <em>enforced</em> geram exceção; as outras geram aviso no log de quota.</dd>
+</dl>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="page-cache" data-k="cap. 2">
+<h2>Page cache: iscache × middleware do SFRA</h2>
+<div class="prose">
+<p>Existem duas formas de marcar uma resposta como cacheável. Em SFRA, prefira o <strong>middleware</strong> na rota, que concentra a política de cache no controller:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="app_storefront_base/cartridge/scripts/middleware/cache.js (SFRA)">
+function applyDefaultCache(req, res, next) {             // 24 h
+    res.cachePeriod = 24;
+    res.cachePeriodUnit = 'hours';
+    next();
+}
+function applyPromotionSensitiveCache(req, res, next) {  // 24 h, personalizado
+    res.cachePeriod = 24;
+    res.cachePeriodUnit = 'hours';
+    res.personalized = true;
+    next();
+}
+function applyShortPromotionSensitiveCache(req, res, next) { // 1 h, personalizado
+    res.cachePeriod = 1;
+    res.cachePeriodUnit = 'hours';
+    res.personalized = true;
+    next();
+}
+function applyInventorySensitiveCache(req, res, next) {  // 30 min
+    res.cachePeriod = 30;
+    res.cachePeriodUnit = 'minutes';
+    next();
+}
+// modules/server/server.js, ao final da rota:
+//   res.base.setExpires(agora + cachePeriod);  if (res.personalized) res.base.setVaryBy('price_promotion');
+</script>
+<table>
+<thead><tr><th>Rota do SFRA base</th><th>Middleware</th></tr></thead>
+<tbody>
+<tr><td><code>Home-Show</code>, <code>Default-Start</code>, <code>Search-Refinebar</code>, <code>Search-Content</code>, <code>Page-Show</code>, <code>Stores-Find</code>, <code>SearchServices-GetSuggestions</code></td><td><code>applyDefaultCache</code></td></tr>
+<tr><td><code>Product-Show</code>, <code>Product-ShowQuickView</code>, <code>Tile-Show</code></td><td><code>applyPromotionSensitiveCache</code></td></tr>
+<tr><td><code>Search-Show</code>, <code>Search-ShowAjax</code></td><td><code>applyShortPromotionSensitiveCache</code></td></tr>
+<tr><td><code>Cart-*</code>, <code>Checkout-*</code>, <code>Account-*</code></td><td><strong>sem cache</strong> (dados do comprador)</td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/Brand.js">
+'use strict';
+
+var server = require('server');
+var cache = require('*/cartridge/scripts/middleware/cache');
+
+// página de marca: igual para todos, salvo preço e promoção → personalizada
+server.get('Show', cache.applyPromotionSensitiveCache, function (req, res, next) {
+    res.render('brand/brandPage', { brandID: req.querystring.bid });
+    next();
+});
+
+module.exports = server.exports();
+</script>
+<h3 id="iscache">O equivalente em ISML</h3>
+<script type="text/plain" class="src" data-lang="isml" data-file="exemplos de iscache">
+<iscache type="relative" hour="24"/>                         <!-- expira 24 h depois de gerado -->
+<iscache type="daily" hour="4" minute="30"/>                  <!-- expira todo dia às 04:30 GMT -->
+<iscache type="relative" hour="24" varyby="price_promotion"/> <!-- página personalizada -->
+<iscache type="relative" minute="30" if="${!pdict.isPreview}"/> <!-- cache condicional -->
+<!-- <iscache status="off"/> é DEPRECATED: para não cachear, simplesmente não use iscache -->
+</script>
+<ul>
+  <li>É obrigatório informar <code>type</code> ou <code>varyby</code>.</li>
+  <li><code>varyby="price_promotion"</code> guarda variações por promoções ativas, regras de ordenação, price books aplicáveis e grupos de A/B test. Use só se a página realmente varia por esses fatores, porque fragmenta o cache. Personalização por outros critérios (nome, segmento custom) não pode ir para o cache.</li>
+  <li>Se um template ou um include local tiver <code>varyby</code>, a página inteira é tratada como personalizada. A duração efetiva é a menor entre os includes locais.</li>
+  <li>O page cache precisa estar <strong>habilitado no site</strong> (<em>Administration &gt; Sites &gt; Manage Sites &gt; site &gt; Cache</em>). Sem isso, <code>iscache</code> é ignorado. Em produção ele não pode ser desligado.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="remote-includes" data-k="cap. 3">
+<h2>Remote includes: separar o dinâmico do estático</h2>
+<div class="prose">
+<script type="text/plain" class="mmd" data-caption="PDP cacheada por 24 h com fragmentos de duração própria">
+flowchart TB
+  PDP["Product-Show · 24 h · varyby price_promotion"]
+  PDP --> H["header (local include)"]
+  PDP --> MC["remote include: Cart-MiniCart · sem cache"]
+  PDP --> ST["remote include: Product-Availability (custom) · 30 min"]
+  PDP --> RC["remote include: recomendações (custom) · 24 h"]
+  PDP --> SL["isslot (internamente 2 remote includes)"]
+</script>
+<script type="text/plain" class="src" data-lang="isml" data-file="templates/default/product/productDetails.isml (trecho)">
+<isinclude template="product/components/productName"/>                <!-- mesmo cache da página -->
+
+<isinclude url="${URLUtils.url('Cart-MiniCart')}"/>                  <!-- rota do base (server.middleware.include), sem cache -->
+<isinclude url="${URLUtils.url('Product-Availability', 'pid', product.id)}"/> <!-- rota do projeto, 30 min -->
+</script>
+<ul>
+  <li>Página cacheada + fragmento por comprador (minicart, saudação, wishlist) = remote include sem cache. Assim, 99% do HTML sai do cache.</li>
+  <li>Checklist oficial: no máximo <strong>20 remote includes</strong> por página e profundidade de 3 a 7 (quanto menor, melhor). Cada <code>&lt;isslot&gt;</code> usa 2 remote includes internamente.</li>
+  <li>Os parâmetros do remote include fazem parte da chave. Não use parâmetros únicos (ID do cliente, timestamp) em fragmentos cacheáveis.</li>
+  <li>Não use remote include com parâmetros únicos para montar tiles de busca.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="invalidacao" data-k="cap. 4">
+<h2>Hit ratio, URL diversity e invalidação</h2>
+<div class="prose">
+<ul>
+  <li><strong>Meta</strong>: hit ratio de pelo menos <strong>70%</strong> por controller, e acima de 90% é melhor. Acompanhe na aba técnica de <em>Reports &amp; Dashboards</em>.</li>
+  <li><strong>URL diversity</strong> derruba o hit ratio. Mantenha parâmetros em ordem alfabética e sem nomes vazios, remova parâmetros únicos (dados do comprador vão em sessão ou cookie), encurte as URLs e não ponha IDs de cliente em links de e-mail marketing. Para parâmetros de campanha inevitáveis, use a feature switch <em>Web Adapter Cache Key Ignore by Query String</em>.</li>
+  <li><strong>GET × POST</strong>: POST sempre ignora o page cache. Formulários de busca e filtro devem usar GET.</li>
+  <li><strong>Invalidação</strong>: acontece por replicação ou por invalidação explícita no BM (o site inteiro ou uma <strong>partição</strong>), de forma gradual em cerca de 15 minutos. Partições: até 10, com até 20 pipelines ou controllers cada, sendo cada controller em só uma partição. Remote includes não são invalidados junto com a página que os contém, por isso coloque-os numa partição separada.</li>
+  <li>Invalidar o cache em produção causa pico de carga no app server. Evite fazer isso no horário de pico.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="custom-cache" data-k="cap. 5">
+<h2>Custom caches (CacheMgr)</h2>
+<div class="prose">
+<p>Para dados caros de calcular, ou respostas de serviços que mudam pouco, que você lê em muitas requisições:</p>
+<script type="text/plain" class="src" data-lang="json" data-file="cartridges/app_custom_acme/package.json">
+{
+  "name": "app_custom_acme",
+  "hooks": "./cartridge/scripts/hooks.json",
+  "caches": "./caches.json"
+}
+</script>
+<script type="text/plain" class="src" data-lang="json" data-file="cartridges/app_custom_acme/caches.json">
+{
+  "caches": [
+    { "id": "acmeStoreAvailability", "expireAfterSeconds": 300 },
+    { "id": "acmeSiteConfig" }
+  ]
+}
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="cartridges/app_custom_acme/cartridge/scripts/helpers/storeAvailability.js">
+'use strict';
+
+var CacheMgr = require('dw/system/CacheMgr');
+var Site = require('dw/system/Site');
+
+/**
+ * Disponibilidade em loja (vinda do OMS), em cache por 5 min por site + loja + produto.
+ * @param {string} storeID - loja
+ * @param {string} productID - produto
+ * @returns {{available: boolean, qty: number}|null} dado ou null
+ */
+function get(storeID, productID) {
+    var cache = CacheMgr.getCache('acmeStoreAvailability');
+    var key = [Site.current.ID, storeID, productID].join('|'); // inclua o escopo na chave
+
+    return cache.get(key, function load() {
+        var oms = require('*/cartridge/scripts/services/omsService');
+        var data = oms.getStoreAvailability(storeID, productID); // Service Framework
+        return data ? { available: data.qty > 0, qty: data.qty } : null; // null pode; undefined não
+    });
+}
+
+module.exports = { get: get };
+</script>
+<ul>
+  <li>Cerca de <strong>20 MB por app server</strong> para todos os caches; até <strong>100 caches</strong> por code version; entradas de até <strong>128 KB</strong>; IDs únicos entre cartridges (ID duplicado desabilita o cache e gera log de erro).</li>
+  <li>Guardam só primitivos e objetos em árvore (JSON-like), nunca objetos da Script API como <code>Product</code> ou <code>Basket</code>. O que volta do cache é uma <strong>cópia imutável</strong>.</li>
+  <li><strong>Não são compartilhados entre app servers</strong>, e <code>invalidate(key)</code> só limpa o servidor atual. Não há garantia de persistência: o loader precisa sempre conseguir recalcular.</li>
+  <li>São limpos quando a code version muda ou é ativada, e ao fim de replicações de código ou de dados.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="indice" data-k="cap. 6">
+<h2>Use o índice de busca, não o banco</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Evite em páginas muito acessadas</th><th>Prefira</th></tr></thead>
+<tbody>
+<tr><td><code>Category.getProducts()</code>, <code>getOnlineProducts()</code>, <code>getProductAssignments()</code></td><td><code>ProductSearchModel</code> com <code>setCategoryID()</code> + <code>search()</code></td></tr>
+<tr><td><code>Product.getVariants()</code> / <code>getVariationModel()</code> em tiles</td><td><code>ProductSearchHit.getRepresentedProductIDs()</code>, <code>getRepresentedVariationValues(attr)</code></td></tr>
+<tr><td><code>Product.getPriceModel()</code> em cada tile</td><td><code>ProductSearchHit.getMinPrice()</code> / <code>getMaxPrice()</code></td></tr>
+<tr><td>Filtrar estoque em código</td><td><code>ProductSearchModel.setOrderableProductsOnly(true)</code></td></tr>
+<tr><td>Pós-processar resultados (filtrar, reordenar)</td><td>Pôr o critério na query: refinamentos, sorting rules, searchable attributes</td></tr>
+<tr><td><code>ProductMgr.queryAllSiteProducts()</code> no storefront</td><td>Proibido (quota 0 para <code>queryAllProducts</code>); use jobs</td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="src" data-lang="js" data-file="helper: produtos em promoção numa categoria, via índice">
+var ProductSearchModel = require('dw/catalog/ProductSearchModel');
+
+function topProducts(categoryID, limit) {
+    var psm = new ProductSearchModel();
+    psm.setCategoryID(categoryID);
+    psm.setOrderableProductsOnly(true);
+    psm.setRecursiveCategorySearch(true);
+    psm.search();
+
+    var result = [];
+    var hits = psm.getProductSearchHits();       // iterator do índice, sem tocar no banco
+    while (hits.hasNext() && result.length < limit) {
+        var hit = hits.next();
+        result.push({
+            id: hit.productID,
+            min: hit.minPrice.value,
+            max: hit.maxPrice.value,
+            colors: hit.getRepresentedVariationValues('color').size()
+        });
+    }
+    return result;
+}
+</script>
+<aside class="callout" data-kind="note">
+<p>O índice é atualizado por reindexação (job <code>SearchReindex</code> ou incremental). O dado pode estar alguns minutos atrás do banco, e isso é aceitável na maioria das páginas de listagem.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="quotas" data-k="cap. 7">
+<h2>Quotas que caem em código real</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Quota</th><th>Limite</th><th>Consequência típica</th></tr></thead>
+<tbody>
+<tr><td><code>api.dw.util.collectionSize</code></td><td>20.000 elementos (aviso em 12.000)</td><td>Coleções <code>dw.util</code> enormes</td></tr>
+<tr><td><code>api.jsArraySize</code> / <code>api.jsCollectionSize</code></td><td>20.000 (aviso em 12.000)</td><td>Arrays, Maps e Sets JS</td></tr>
+<tr><td><code>api.jsObjectSize</code></td><td>2.000 propriedades</td><td>Objetos "dicionário" gigantes</td></tr>
+<tr><td><code>api.jsStringLength</code> / <code>api.jsJSONStringLength</code></td><td>1.000.000 caracteres</td><td>Montar XML ou JSON enorme em memória</td></tr>
+<tr><td><code>api.dw.net.HTTPClient.send()</code></td><td>16 por página no storefront (aviso em 10)</td><td>Chamadas em loop</td></tr>
+<tr><td><code>api.session.maxStringLength</code> / <code>maxKeyLength</code></td><td>2.000 caracteres / 50 no nome</td><td>Guardar objetos serializados na sessão</td></tr>
+<tr><td><code>api.cookie.maxValueLength</code></td><td>2.000</td><td>Cookies grandes</td></tr>
+<tr><td><code>api.jsEval</code></td><td>0</td><td><code>eval()</code> não é suportado</td></tr>
+<tr><td><code>api.dw.catalog.ProductMgr.queryAllProducts()</code></td><td>0 no storefront</td><td>Varrer o catálogo numa requisição</td></tr>
+<tr><td><code>object.OrderPO.multipleOrdersInCommit</code></td><td>1</td><td>Vários pedidos na mesma transação</td></tr>
+<tr><td>Custom objects</td><td><code>createCustomObject</code>: 10 por requisição de storefront; ~400 mil por tipo</td><td>Uso de CO como banco de dados</td></tr>
+</tbody>
+</table>
+<ul>
+  <li>Acompanhe em <em>Administration &gt; Operations &gt; Quota Status</em> e assine os alertas do Quota Dashboard. Em Staging e Production, a meta é zero violações de quotas enforced.</li>
+  <li>Transações: a plataforma foi desenhada para até <strong>1.000 objetos modificados</strong> por transação, e uma requisição de storefront nem deve se aproximar disso.</li>
+  <li>O web tier fecha a conexão do navegador após <strong>5 minutos</strong>. Operação longa é trabalho de job.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="codigo" data-k="cap. 8">
+<h2>Código do lado do servidor e front-end</h2>
+<div class="prose">
+<ul>
+  <li><strong>onRequest/onSession</strong> rodam em toda requisição ou sessão. Mantenha-os com menos de ~10 ms e sem chamadas externas.</li>
+  <li><strong>Sem chamadas a terceiros</strong> em Home, PLP, PDP e tiles. Quando forem inevitáveis, use timeout baixo (~1 s), porque uma thread esperando não atende ninguém.</li>
+  <li><strong>Paginação</strong>: até 24 produtos por página de listagem (checklist) e um teto como 120 em "ver todos". Escopo controlado no "Sort All".</li>
+  <li><strong>Não reserve a cesta várias vezes</strong>, nem reserve e crie o pedido na mesma requisição.</li>
+  <li><strong>Sem objetos desnecessários</strong>: wishlist para todo anônimo, atributos de sessão, cookies e custom objects sem job de limpeza.</li>
+  <li><strong>Controllers não chamam outros controllers.</strong> Reutilize helpers.</li>
+  <li><strong>Sintaxe</strong>: o checklist oficial de eficiência recomenda <code>var</code> em vez de <code>let</code>/<code>const</code> no script de servidor, por limitações do motor Rhino com escopo de bloco.</li>
+  <li><strong>Front-end</strong>: scripts no fim do body ou com <code>defer</code>, CSS e JS minificados (o build do SFRA já faz isso), imagens no tamanho certo (Dynamic Imaging Service com <code>getImageURL({scaleWidth: …})</code>), SVG para ícones, menos domínios e menos redirects, CDN.</li>
+  <li><strong>Jobs</strong>: <em>job load factor</em> (segundos de job por dia ÷ 86.400) abaixo de 0,20 em Staging e Production.</li>
+</ul>
+<aside class="callout" data-kind="verify">
+<p>A recomendação sobre <code>var</code> vem do Knowledge Article 000391851 (2026). O motor atual aceita boa parte da sintaxe ES6 conforme o modo de compatibilidade do site. Siga o padrão do projeto, mas saiba que é isso que a documentação recomenda.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Cachear página com dado do comprador</strong> (nome, cesta, endereço): outros compradores veem os dados errados, e há vazamento de PII. Isole em remote include sem cache.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Percorrer variantes em cada tile da PLP</strong>: milhares de objetos tocados por render e risco de quota. Use os hits do índice.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong><code>varyby="price_promotion"</code> em todas as páginas "por precaução"</strong>: fragmenta o cache sem necessidade.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Guardar <code>Product</code> ou <code>Basket</code> em custom cache ou sessão.</strong> Só dados serializáveis e pequenos.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>Remote include tem cache próprio; local include herda e reduz o cache da página.</li>
+  <li><code>iscache status="off"</code> é deprecated: omita o elemento ou use <code>if</code>.</li>
+  <li>Em SFRA, cache por middleware: <code>cache.applyDefaultCache</code> e similares.</li>
+  <li>Custom cache: <code>caches.json</code> referenciado no <code>package.json</code>; <code>CacheMgr.getCache(id).get(key, loader)</code>.</li>
+  <li>Listagens: <code>ProductSearchModel</code> e os hits, não <code>Category.getProducts()</code>.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>Página nunca vem do cache</td><td>Page cache desligado no site; sem middleware ou iscache; POST; um include com <code>status="off"</code></td><td>Storefront Toolkit → Cache Information; revise a rota e os includes.</td></tr>
+<tr><td>Comprador vê o minicart ou o nome de outro</td><td>Dado pessoal num template cacheado</td><td>Mova para remote include sem cache.</td></tr>
+<tr><td>Preço errado para um grupo de clientes</td><td>Página personalizada sem <code>varyby</code></td><td><code>applyPromotionSensitiveCache</code> / <code>varyby</code>.</td></tr>
+<tr><td>Hit ratio baixo</td><td>URL diversity (parâmetros de campanha, ordem variável)</td><td>Normalize as URLs; feature switch de ignorar query strings.</td></tr>
+<tr><td>Conteúdo não atualiza após mudança</td><td>Cache válido; remote include em outra partição</td><td>Invalide a partição certa, ou espere a replicação.</td></tr>
+<tr><td>Custom cache "não funciona"</td><td>ID duplicado entre cartridges; valor maior que 128 KB; <code>undefined</code> retornado</td><td>Veja o custom error log; retorne <code>null</code>.</td></tr>
+<tr><td>Quota warnings em PLP</td><td>Loop de variantes ou de <code>getPriceModel</code></td><td>Code Profiler; troque por hits do índice.</td></tr>
+<tr><td>PDP lenta só em produção</td><td>Chamada externa síncrona; transações grandes</td><td>Code Profiler (modo produção), Service Status.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Configurar o page cache por middleware (SFRA) ou <code>iscache</code>, com ou sem personalização.</li>
+  <li>Usar remote includes para partes por comprador, dentro dos limites de quantidade e profundidade.</li>
+  <li>Aumentar o hit ratio (URL diversity, GET) e invalidar por partição.</li>
+  <li>Criar e usar custom caches respeitando os limites e a natureza local por app server.</li>
+  <li>Trocar APIs de banco por APIs do índice de busca em listagens.</li>
+  <li>Reconhecer e evitar violações de quota; dimensionar transações; mover o pesado para jobs.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">A PDP é cacheada por 24 h, mas a disponibilidade deve atualizar a cada 30 minutos. Como resolver?</p>
+  <ol class="opts-l"><li>Reduzir o cache da PDP inteira para 30 min</li><li>Renderizar a disponibilidade num remote include com <code>applyInventorySensitiveCache</code></li><li>Desligar o cache</li><li>Usar <code>varyby</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O remote include tem cache próprio; um local include reduziria o cache da página inteira.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual a forma recomendada de não cachear um template?</p>
+  <ol class="opts-l"><li><code>&lt;iscache status="off"/&gt;</code></li><li>Omitir o <code>iscache</code> (ou usar o atributo <code>if</code>)</li><li><code>hour="0"</code></li><li><code>varyby="none"</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> <code>status="off"</code> é deprecated e impede reativar o cache.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Uma página varia por price book do grupo de clientes. O que configurar?</p>
+  <ol class="opts-l"><li>Sem cache</li><li>Cache personalizado: <code>varyby="price_promotion"</code> ou <code>applyPromotionSensitiveCache</code></li><li>Custom cache</li><li>Remote include por cliente</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong></p></div></details>
+</li>
+<li>
+  <p class="drill-q">Um custom cache é invalidado com <code>cache.invalidate(key)</code>, mas alguns compradores ainda veem o valor antigo. Por quê?</p>
+  <ol class="opts-l"><li>Bug da plataforma</li><li>Custom caches são locais a cada app server; a invalidação só limpa o servidor atual</li><li>Falta reindexar</li><li>O TTL é infinito</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Use TTL curto para dados que mudam.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Os tiles da PLP chamam <code>product.getVariants()</code> para mostrar as cores. O que trocar?</p>
+  <ol class="opts-l"><li>Nada</li><li><code>ProductSearchHit.getRepresentedVariationValues('color')</code></li><li>Um custom object com as cores</li><li>OCAPI</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> É uma API "index-friendly" da lista oficial.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Por que um formulário de filtro deveria usar GET?</p>
+  <ol class="opts-l"><li>Segurança</li><li>POST sempre ignora o page cache</li><li>GET é mais curto</li><li>Exigência do CSRF</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> (Formulários que alteram estado continuam POST com CSRF.)</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-iscache.html">iscache Element</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-content-cache.html">Content Cache</a>, <a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-custom-caches.html">Custom Caches</a></li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-site-performance.html">Site Performance</a> (Code Profiler, APIs index-friendly, padrões de estabilidade)</li>
+  <li>Knowledge Articles 000391850 (<em>Caching checklist</em>) e 000391851 (<em>Code Efficiency/Performance Checklist</em>)</li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/quota/html/API_Quotas.html">API Quotas</a> e <a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/quota/html/Object_Quotas.html">Object Quotas</a></li>
+  <li>Código do SFRA: <code>scripts/middleware/cache.js</code> e <code>modules/server/server.js</code></li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

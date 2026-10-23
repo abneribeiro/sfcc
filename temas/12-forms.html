@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>12 · Forms Framework · Guia SFCC</title>
+<meta name="description" content="Forms Framework do B2C Commerce com SFRA: form definition XML (field, group, list, action, include, options, binding), validação por atributo e por função, mensagens localizadas, server.forms.getForm, renderização em ISML, CSRF, validação no cliente, gravação em route:BeforeComplete e persistência em profile ou custom object.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="12" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Forms Framework</h1>
+  <p class="lead">O Forms Framework separa três responsabilidades que formulários costumam misturar: <strong>o que</strong> se coleta e como validar (a <em>form definition</em> XML), <strong>como</strong> se mostra (o ISML) e <strong>onde</strong> se grava (o controller, em profile, basket, endereço ou custom object). Este tema constrói um formulário completo ponta a ponta no SFRA, com validação no servidor e no cliente, mensagens localizadas, proteção CSRF e gravação segura.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>Form definition</dt><dd>Arquivo XML em <code>cartridge/forms/default/&lt;nome&gt;.xml</code> (ou numa pasta de locale) que descreve campos, tipos, validações e mensagens.</dd>
+  <dt>Formulário em memória</dt><dd>Objeto criado a partir da definition que <strong>persiste na sessão</strong> até ser limpo (<code>clear()</code>). Na Script API é <code>session.forms.&lt;nome&gt;</code> (<code>dw.web.Form</code>).</dd>
+  <dt>server.forms.getForm(nome)</dt><dd>No SFRA, devolve um <strong>objeto JSON</strong> derivado do form em memória, com <code>valid</code>, <code>htmlName</code>, os campos e os métodos <code>clear()</code>, <code>copyFrom(obj)</code> e <code>toObject()</code>.</dd>
+  <dt>Field</dt><dd>Campo (<code>type</code> = string, integer, number, boolean ou date).</dd>
+  <dt>Group</dt><dd>Agrupa campos (<code>profileForm.customer.firstname</code>).</dd>
+  <dt>List</dt><dd>Repetição de um grupo (ex.: itens).</dd>
+  <dt>Action</dt><dd>Botão de submit nomeado (<code>valid-form="true"</code> exige o form válido).</dd>
+  <dt>Binding</dt><dd>Liga um campo a um atributo de objeto da API (usado nos fluxos clássicos com <code>copyFrom</code>/<code>copyTo</code>).</dd>
+</dl>
+<script type="text/plain" class="mmd" data-caption="ciclo de um formulário no SFRA">
+sequenceDiagram
+  autonumber
+  participant B as Navegador
+  participant C as Controller
+  participant F as server.forms
+  participant DB as Banco
+  B->>C: GET Newsletter-Show
+  C->>F: getForm('newsletter').clear()
+  C->>C: csrfProtection.generateToken
+  C-->>B: ISML com field.attributes e token CSRF
+  B->>B: validação HTML5 e JS (clientSideValidation)
+  B->>C: POST (AJAX) Newsletter-Subscribe
+  C->>C: csrfProtection.validateAjaxRequest
+  C->>F: getForm('newsletter') → valid? regras extras
+  alt inválido
+    C-->>B: JSON { success:false, fields: formErrors }
+  else válido
+    C->>C: route:BeforeComplete → Transaction.wrap
+    C->>DB: grava (custom object / profile)
+    C-->>B: JSON { success:true }
+  end
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="definition" data-k="cap. 2">
+<h2>A form definition XML</h2>
+<div class="prose">
+<p>Namespace <code>http://www.demandware.com/xml/form/2008-04-19</code>. Elementos e atributos, conforme o XSD oficial (<code>form.xsd</code>):</p>
+<table>
+<thead><tr><th>Elemento</th><th>Atributos principais</th></tr></thead>
+<tbody>
+<tr><td><code>&lt;form&gt;</code></td><td><code>formid</code>, <code>secure</code></td></tr>
+<tr><td><code>&lt;field&gt;</code></td><td><code>formid</code>, <code>type</code> (string, integer, number, boolean, date), <code>label</code>, <code>description</code>, <code>mandatory</code>, <code>min-length</code>, <code>max-length</code>, <code>min</code>, <code>max</code>, <code>regexp</code>, <code>validation</code>, <code>default-value</code>, <code>format</code>, <code>whitespace</code> (none, remove), <code>masked</code>, <code>checked-value</code>, <code>unchecked-value</code>, <code>binding</code>, <code>attribute-def</code>, <code>timezoned</code>, e as mensagens <code>missing-error</code>, <code>parse-error</code>, <code>range-error</code>, <code>value-error</code></td></tr>
+<tr><td><code>&lt;options&gt;</code> / <code>&lt;option&gt;</code></td><td>Lista de valores de um select: <code>optionid</code>, <code>value</code>, <code>label</code>, <code>default</code>; ou bindings dinâmicos</td></tr>
+<tr><td><code>&lt;group&gt;</code></td><td><code>formid</code>, <code>binding</code>, <code>validation</code>, <code>form-error</code></td></tr>
+<tr><td><code>&lt;list&gt;</code></td><td>Repetição (<code>formid</code>, <code>binding</code>, <code>selectone-fieldid</code>, <code>selectmany-fieldid</code>)</td></tr>
+<tr><td><code>&lt;include&gt;</code></td><td>Inclui outra definition (<code>formid</code>, <code>name</code>): reaproveite <code>address.xml</code> em vários forms</td></tr>
+<tr><td><code>&lt;action&gt;</code></td><td><code>formid</code>, <code>valid-form</code> (padrão true), <code>label</code></td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="src" data-lang="xml" data-file="app_custom_acme/cartridge/forms/default/newsletter.xml">
+<?xml version="1.0"?>
+<form xmlns="http://www.demandware.com/xml/form/2008-04-19">
+    <field formid="email" label="label.newsletter.email" type="string" mandatory="true"
+           max-length="80" whitespace="remove"
+           regexp="^[\w.%+-]+@[\w.-]+\.[\w]{2,}$"
+           missing-error="error.message.required"
+           parse-error="error.newsletter.email.invalid"
+           range-error="error.message.80orless" />
+
+    <field formid="firstName" label="label.newsletter.firstname" type="string" mandatory="false" max-length="50" />
+
+    <field formid="interest" label="label.newsletter.interest" type="string" mandatory="true"
+           missing-error="error.message.required">
+        <options>
+            <option optionid="" value="" label="select.option.choose" />
+            <option optionid="women" value="women" label="newsletter.interest.women" />
+            <option optionid="men" value="men" label="newsletter.interest.men" />
+            <option optionid="kids" value="kids" label="newsletter.interest.kids" />
+        </options>
+    </field>
+
+    <field formid="birthday" label="label.newsletter.birthday" type="date" mandatory="false" format="dd/MM/yyyy"
+           parse-error="error.newsletter.birthday.invalid" />
+
+    <!-- boolean obrigatório = checkbox que precisa estar marcado -->
+    <field formid="consent" label="label.newsletter.consent" type="boolean" mandatory="true"
+           missing-error="error.newsletter.consent.required" />
+
+    <action formid="subscribe" valid-form="true" />
+</form>
+</script>
+<aside class="callout" data-kind="note">
+<p>Os labels e as mensagens são <strong>chaves</strong> de resource bundle, procuradas no <code>forms.properties</code> do cartridge (e nas variações por locale, como <code>forms_pt_BR.properties</code>). Um texto literal no atributo também funciona, mas não é traduzível.</p>
+</aside>
+<script type="text/plain" class="src" data-lang="properties" data-file="app_custom_acme/cartridge/templates/resources/forms_pt_BR.properties">
+label.newsletter.email=E-mail
+label.newsletter.firstname=Nome
+label.newsletter.interest=Seu interesse
+label.newsletter.birthday=Data de nascimento
+label.newsletter.consent=Aceito receber comunicações por e-mail
+error.newsletter.email.invalid=Informe um e-mail válido.
+error.newsletter.birthday.invalid=Use o formato dd/mm/aaaa.
+error.newsletter.consent.required=É preciso aceitar para continuar.
+newsletter.interest.women=Feminino
+newsletter.interest.men=Masculino
+newsletter.interest.kids=Infantil
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="validacao" data-k="cap. 3">
+<h2>Validação no servidor</h2>
+<div class="prose">
+<h3 id="por-atributo">Por atributo</h3>
+<table>
+<thead><tr><th>Regra violada</th><th>Mensagem usada</th></tr></thead>
+<tbody>
+<tr><td><code>mandatory="true"</code> sem valor</td><td><code>missing-error</code></td></tr>
+<tr><td>Valor não converte para o tipo, ou não casa com <code>regexp</code></td><td><code>parse-error</code></td></tr>
+<tr><td>Fora de <code>min</code>/<code>max</code>, <code>min-length</code>/<code>max-length</code></td><td><code>range-error</code></td></tr>
+<tr><td>Inválido de forma geral (padrão)</td><td><code>value-error</code></td></tr>
+</tbody>
+</table>
+<p>A documentação observa que <code>max-length</code> só <strong>valida</strong> strings; em outros tipos ele só formata o campo.</p>
+
+<h3 id="por-funcao">Por função</h3>
+<p>O atributo <code>validation</code> chama uma função em campos, grupos ou no form. Ela recebe o elemento e devolve <code>true</code>/<code>false</code> (ou um <code>dw.web.FormElementValidationResult</code> com mensagem):</p>
+<script type="text/plain" class="src" data-lang="xml" data-file="campo com validação por função">
+<field formid="cpf" label="label.cpf" type="string" mandatory="true"
+       validation="${require('*/cartridge/scripts/forms/validators').cpf(formfield)}"
+       value-error="error.cpf.invalid" />
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/scripts/forms/validators.js">
+'use strict';
+
+/**
+ * Valida os dígitos verificadores de um CPF.
+ * @param {dw.web.FormField} formfield
+ * @returns {boolean}
+ */
+function cpf(formfield) {
+    var digits = String(formfield.value || '').replace(/\D/g, '');
+    if (digits.length !== 11 || /^(\d)\1+$/.test(digits)) return false;
+    var calc = function (len) {
+        var sum = 0;
+        for (var i = 0; i < len; i++) sum += parseInt(digits.charAt(i), 10) * (len + 1 - i);
+        var r = (sum * 10) % 11;
+        return r === 10 ? 0 : r;
+    };
+    return calc(9) === parseInt(digits.charAt(9), 10) && calc(10) === parseInt(digits.charAt(10), 10);
+}
+
+module.exports = { cpf: cpf };
+</script>
+
+<h3 id="regras-controller">Regras que dependem de vários campos</h3>
+<p>Para "e-mail igual à confirmação" e similares, o SFRA invalida manualmente no controller, como em <code>Account-SaveProfile</code>:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="app_storefront_base/cartridge/controllers/Account.js (trecho de SaveProfile)">
+var profileForm = server.forms.getForm('profile');
+
+if (profileForm.customer.email.value.toLowerCase()
+    !== profileForm.customer.emailconfirm.value.toLowerCase()) {
+    profileForm.valid = false;
+    profileForm.customer.email.valid = false;
+    profileForm.customer.emailconfirm.valid = false;
+    profileForm.customer.emailconfirm.error =
+        Resource.msg('error.message.mismatch.email', 'forms', null);
+}
+</script>
+<p>Se qualquer elemento for inválido, o form inteiro é inválido. Na Script API clássica, use <code>formField.invalidateFormElement()</code>.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="render" data-k="cap. 4">
+<h2>Renderizando o form</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/Newsletter.js (rota que exibe)">
+'use strict';
+
+var server = require('server');
+var csrfProtection = require('*/cartridge/scripts/middleware/csrf');
+
+server.get('Show', server.middleware.https, csrfProtection.generateToken, function (req, res, next) {
+    var URLUtils = require('dw/web/URLUtils');
+    var newsletterForm = server.forms.getForm('newsletter');
+    newsletterForm.clear(); // o form em memória vive na sessão: limpe ao exibir de novo
+
+    res.render('newsletter/subscribe', {
+        newsletterForm: newsletterForm,
+        actionUrl: URLUtils.url('Newsletter-Subscribe').toString()
+    });
+    next();
+});
+</script>
+<p>Cada campo do JSON tem <code>htmlName</code> (o <code>name</code> que o servidor espera de volta), <code>label</code>, <code>mandatory</code>, <code>value</code>/<code>htmlValue</code>, <code>valid</code>, <code>error</code>, <code>options</code> (selects) e <code>attributes</code>: uma string pronta com <code>name</code>, <code>required</code>, <code>aria-required</code>, <code>value</code> (codificado), <code>maxLength</code>, <code>minLength</code>, <code>pattern</code>, <code>min</code> e <code>max</code>, derivada da definition. É isso que liga a validação HTML5 do navegador às regras do servidor.</p>
+<script type="text/plain" class="src" data-lang="isml" data-file="app_custom_acme/cartridge/templates/default/newsletter/subscribe.isml">
+<isdecorate template="common/layout/page">
+    <isscript>
+        var assets = require('*/cartridge/scripts/assets');
+        assets.addJs('/js/newsletter.js');
+    </isscript>
+    <isset name="f" value="${pdict.newsletterForm}" scope="page" />
+
+    <form action="${pdict.actionUrl}" method="POST" class="newsletter-form"
+          <isprint value="${f.attributes}" encoding="off" /> novalidate>
+
+        <div class="form-group ${f.email.mandatory ? 'required' : ''}">
+            <label class="form-control-label" for="nl-email">${f.email.label}</label>
+            <input type="email" id="nl-email" class="form-control"
+                   <isprint value="${f.email.attributes}" encoding="off" />
+                   data-missing-error="${Resource.msg('error.message.required', 'forms', null)}"
+                   data-pattern-mismatch="${Resource.msg('error.newsletter.email.invalid', 'forms', null)}" />
+            <div class="invalid-feedback"></div>
+        </div>
+
+        <div class="form-group required">
+            <label class="form-control-label" for="nl-interest">${f.interest.label}</label>
+            <select id="nl-interest" class="form-control custom-select" name="${f.interest.htmlName}" required>
+                <isloop items="${f.interest.options}" var="opt">
+                    <option value="${opt.htmlValue}" <isif condition="${opt.selected}">selected</isif>>${opt.label}</option>
+                </isloop>
+            </select>
+            <div class="invalid-feedback"></div>
+        </div>
+
+        <div class="form-group custom-control custom-checkbox">
+            <input type="checkbox" id="nl-consent" class="custom-control-input" <isprint value="${f.consent.attributes}" encoding="off" /> />
+            <label class="custom-control-label" for="nl-consent">${f.consent.label}</label>
+            <div class="invalid-feedback"></div>
+        </div>
+
+        <iscomment> token CSRF gerado pelo middleware generateToken </iscomment>
+        <input type="hidden" name="${pdict.csrf.tokenName}" value="${pdict.csrf.token}" />
+
+        <button type="submit" class="btn btn-primary">${Resource.msg('button.subscribe', 'newsletter', null)}</button>
+    </form>
+</isdecorate>
+</script>
+<aside class="callout" data-kind="warn">
+<p>Os nomes enviados precisam ser os <code>htmlName</code> do form (ex.: <code>dwfrm_newsletter_email</code>), não nomes livres. Um <code>&lt;input name="email"&gt;</code> não preenche o campo do form, e <code>getForm</code> o verá vazio. Sempre use <code>field.attributes</code> ou <code>field.htmlName</code>.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="csrf" data-k="cap. 5">
+<h2>CSRF</h2>
+<div class="prose">
+<p>Cross-Site Request Forgery: um site malicioso faz o navegador do comprador logado enviar um POST ao seu storefront. A proteção do B2C Commerce (<code>dw.web.CSRFProtection</code>) gera um token por sessão que precisa voltar em cada POST sensível. No SFRA:</p>
+<table>
+<thead><tr><th>Onde</th><th>Middleware</th><th>Efeito</th></tr></thead>
+<tbody>
+<tr><td>Rota que <strong>renderiza</strong> o form</td><td><code>csrfProtection.generateToken</code></td><td>Põe <code>csrf.tokenName</code> e <code>csrf.token</code> no viewData</td></tr>
+<tr><td>Rota que <strong>recebe</strong> (página)</td><td><code>csrfProtection.validateRequest</code></td><td>Token inválido: logout e redirect para <code>CSRF-Fail</code></td></tr>
+<tr><td>Rota que <strong>recebe</strong> (AJAX)</td><td><code>csrfProtection.validateAjaxRequest</code></td><td>Token inválido: logout e redirect para <code>CSRF-AjaxFail</code> (JSON)</td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="src" data-lang="js" data-file="validação direta pela API (fora do SFRA)">
+var CSRFProtection = require('dw/web/CSRFProtection');
+if (!CSRFProtection.validateRequest()) {   // lê o parâmetro com o nome CSRFProtection.getTokenName()
+    // recusar
+}
+</script>
+<aside class="callout" data-kind="exam">
+<p>Formulários que <strong>alteram estado</strong> (login, perfil, endereço, senha, checkout, newsletter) precisam de CSRF. Rotas GET que só exibem dados não. O token vai num campo oculto com o nome dado por <code>tokenName</code>.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="gravar" data-k="cap. 6">
+<h2>Recebendo, validando e gravando</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/controllers/Newsletter.js (rota que recebe)">
+server.post('Subscribe', server.middleware.https, csrfProtection.validateAjaxRequest, function (req, res, next) {
+    var Resource = require('dw/web/Resource');
+    var formErrors = require('*/cartridge/scripts/formErrors');
+    var form = server.forms.getForm('newsletter'); // já preenchido com o POST pela plataforma
+
+    // regra extra: e-mail de domínio bloqueado
+    if (form.email.valid && /@exemplo-bloqueado\.com$/i.test(form.email.value)) {
+        form.valid = false;
+        form.email.valid = false;
+        form.email.error = Resource.msg('error.newsletter.email.blocked', 'forms', null);
+    }
+
+    if (!form.valid) {
+        // { "dwfrm_newsletter_email": "mensagem", ... }, o formato que o JS do SFRA espera em "fields"
+        res.json({ success: false, fields: formErrors.getFormErrors(form) });
+        return next();
+    }
+
+    res.setViewData({ subscription: form.toObject() }); // { email, firstName, interest, birthday, consent }
+
+    // grava só no fim, depois de possíveis appends de outros cartridges
+    this.on('route:BeforeComplete', function (req2, res2) { // eslint-disable-line no-shadow
+        var Transaction = require('dw/system/Transaction');
+        var CustomObjectMgr = require('dw/object/CustomObjectMgr');
+        var data = res2.getViewData().subscription;
+        var key = data.email.toLowerCase();
+
+        Transaction.wrap(function () {
+            var co = CustomObjectMgr.getCustomObject('NewsletterSubscription', key)
+                || CustomObjectMgr.createCustomObject('NewsletterSubscription', key);
+            co.custom.firstName = data.firstName || '';
+            co.custom.interest = data.interest;
+            co.custom.birthday = data.birthday || null;
+            co.custom.consentAt = new Date();
+            co.custom.siteId = require('dw/system/Site').getCurrent().getID();
+        });
+        res2.json({ success: true, message: Resource.msg('msg.newsletter.thanks', 'newsletter', null) });
+    });
+    return next();
+});
+
+module.exports = server.exports();
+</script>
+<aside class="callout" data-kind="warn">
+<p>O tipo <code>NewsletterSubscription</code> precisa ser <strong>não replicável</strong>. Custom objects replicáveis são somente leitura em requests de storefront (quota <code>object.StageableCustomObjectPO.readonly@SF</code>), e dados que nascem em Production não devem ser sobrescritos pela replicação (<a class="text-link" href="13-custom-objects.html">tema 13</a>). O storefront também tem limite de <strong>10 custom objects criados por request</strong> (quota <code>api.dw.object.CustomObjectMgr.create()</code>).</p>
+</aside>
+
+<h3 id="persistir-profile">Gravando em system objects</h3>
+<p>Para perfil e endereços, o SFRA lê os campos do form e chama os setters da API dentro de <code>Transaction.wrap</code>, também em <code>route:BeforeComplete</code> (veja <code>Account-SaveProfile</code> e <code>Address-SaveAddress</code> no base). Os <code>binding</code>s do XML e <code>copyTo()</code> são o mecanismo clássico (SiteGenesis); a documentação do SFRA recomenda copiar os valores explicitamente em JavaScript.</p>
+<h3 id="prepopular">Preenchendo um form com dados existentes</h3>
+<script type="text/plain" class="src" data-lang="js" data-file="padrão do Account-EditProfile">
+var profileForm = server.forms.getForm('profile');
+profileForm.clear();
+profileForm.customer.firstname.value = accountModel.profile.firstName;
+profileForm.customer.lastname.value = accountModel.profile.lastName;
+profileForm.customer.email.value = accountModel.profile.email;
+
+// ou, quando as chaves do objeto batem com os formids:
+var addressForm = server.forms.getForm('address');
+addressForm.copyFrom(addressModel.address); // server/forms/forms.js#copyObjectToForm
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="cliente" data-k="cap. 7">
+<h2>Validação no cliente</h2>
+<div class="prose">
+<p>O SFRA usa a validação HTML5 do navegador (os atributos vêm de <code>field.attributes</code>) e dois utilitários: <code>components/clientSideValidation.js</code> (carregado pelo <code>main.js</code>; valida no submit e mostra as mensagens dos atributos <code>data-missing-error</code>, <code>data-pattern-mismatch</code> etc.) e <code>components/formValidation.js</code> (exibe os erros que o servidor devolveu em <code>fields</code> e <code>error</code>).</p>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/client/default/js/newsletter.js">
+'use strict';
+
+var formValidation = require('base/components/formValidation');
+
+$(document).ready(function () {
+    $('form.newsletter-form').on('submit', function (e) {
+        e.preventDefault();
+        var $form = $(this);
+        $.ajax({
+            url: $form.attr('action'),
+            type: 'post',
+            dataType: 'json',
+            data: $form.serialize(),                   // inclui o token CSRF
+            success: function (data) {
+                if (data.success) {
+                    $form.replaceWith('<p class="alert alert-success">' + data.message + '</p>');
+                } else {
+                    formValidation($form, data);       // marca .is-invalid e preenche .invalid-feedback
+                }
+            },
+            error: function (err) {
+                if (err.responseJSON && err.responseJSON.redirectUrl) {
+                    window.location.href = err.responseJSON.redirectUrl; // ex.: CSRF-AjaxFail
+                }
+            }
+        });
+    });
+});
+</script>
+<aside class="callout" data-kind="anti">
+<p>Validação só no cliente. Ela melhora a experiência, mas qualquer um pode enviar um POST direto. A definition e o controller são a validação de verdade.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="localizar" data-k="cap. 8">
+<h2>Forms por locale e reutilização</h2>
+<div class="prose">
+<ul>
+  <li><strong>Textos</strong>: chaves em <code>forms.properties</code> e variações por locale.</li>
+  <li><strong>Estrutura por país</strong>: definitions de mesmo nome em pastas de locale. A plataforma usa <code>forms/it_IT/billingaddress.xml</code> para it_IT e cai em <code>forms/default/</code> nos outros.</li>
+  <li><strong>Reuso</strong>: <code>&lt;include formid="shippingAddress" name="address"/&gt;</code> embute a definition <code>address.xml</code> dentro de outra.</li>
+  <li><strong>Sobrescrita</strong>: uma definition de mesmo caminho num cartridge à esquerda substitui o arquivo inteiro (não há merge de campos; veja o <a class="text-link" href="06-estender-sfra.html#forms-resources">tema 06</a>).</li>
+</ul>
+<script type="text/plain" class="src" data-lang="text" data-file="estrutura">
+cartridge/forms/
+├── default/
+│   ├── address.xml
+│   └── shipping.xml        # <include formid="shippingAddress" name="address"/>
+└── pt_BR/
+    └── address.xml         # versão brasileira: CEP, número, complemento, bairro
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Ler <code>req.form.campo</code> em vez do form definition</strong> num formulário complexo. Você perde validação, mensagens localizadas e a ligação com a definition.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Esquecer <code>clear()</code></strong>: o form em memória vive na sessão, e o comprador vê dados antigos (às vezes de outra tentativa).</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>POST sem CSRF</strong> em rotas que alteram dados.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Gravar antes de terminar a validação</strong> (no meio da cadeia). Use <code>route:BeforeComplete</code>.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>Definition: <code>forms/default/&lt;nome&gt;.xml</code>; obtida com <code>server.forms.getForm('nome')</code>.</li>
+  <li>Mensagens: <code>missing-error</code> (obrigatório), <code>parse-error</code> (formato/regexp), <code>range-error</code> (limites), <code>value-error</code> (geral).</li>
+  <li>Tipos de field: string, integer, number, boolean, date.</li>
+  <li>CSRF: <code>generateToken</code> na exibição; <code>validateRequest</code>/<code>validateAjaxRequest</code> no recebimento.</li>
+  <li>O form em memória persiste na <strong>sessão</strong> até <code>clear()</code>.</li>
+  <li>Gravar dados: <code>this.on('route:BeforeComplete', …)</code> + <code>Transaction.wrap</code>.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td><code>getForm</code> com campos vazios depois do POST</td><td>Os <code>name</code> dos inputs não são os <code>htmlName</code></td><td>Use <code>field.attributes</code> ou <code>field.htmlName</code>.</td></tr>
+<tr><td>Form sempre inválido</td><td>Boolean obrigatório desmarcado; regexp que não casa (escape no XML); campo obrigatório que não está no HTML</td><td>Logue <code>formErrors.getFormErrors(form)</code>; teste a regexp.</td></tr>
+<tr><td>Mensagem mostra a chave (<code>error.x.y</code>)</td><td>Chave ausente no <code>forms.properties</code> do locale</td><td>Acrescente a chave (e o default).</td></tr>
+<tr><td>Redirect para <code>CSRF-Fail</code></td><td>Token não enviado, sessão expirada, form renderizado sem <code>generateToken</code></td><td>Inclua o campo oculto; gere o token na rota de exibição.</td></tr>
+<tr><td>Dados antigos aparecem no form</td><td>Faltou <code>clear()</code></td><td>Limpe na exibição.</td></tr>
+<tr><td>Form errado para um país</td><td>Pasta de locale com nome diferente do locale ativo</td><td>Confira o locale (<code>pt_BR</code> × <code>pt-BR</code>) e a pasta.</td></tr>
+<tr><td>Erro de transação ao gravar</td><td>Escrita fora de <code>Transaction.wrap</code></td><td>Envolva a gravação.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Escrever uma form definition com fields, options, groups, includes e actions.</li>
+  <li>Aplicar validação por atributo, por função e por regra no controller, com as mensagens certas.</li>
+  <li>Localizar labels e mensagens (<code>forms.properties</code>) e a estrutura (pastas de locale).</li>
+  <li>Obter, limpar e preencher forms com <code>server.forms.getForm</code>, <code>clear</code>, <code>copyFrom</code> e <code>toObject</code>.</li>
+  <li>Renderizar com <code>field.attributes</code>, <code>htmlName</code>, <code>label</code> e <code>options</code>.</li>
+  <li>Proteger com CSRF nos dois lados.</li>
+  <li>Gravar em <code>route:BeforeComplete</code> dentro de transação, em system ou custom objects.</li>
+  <li>Integrar com a validação no cliente do SFRA.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Qual atributo define a mensagem quando um campo obrigatório chega vazio?</p>
+  <ol class="opts-l"><li><code>parse-error</code></li><li><code>missing-error</code></li><li><code>range-error</code></li><li><code>value-error</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> <code>parse-error</code> é de formato ou regexp; <code>range-error</code>, de limites.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Onde fica a definition de um form usado por <code>server.forms.getForm('contato')</code>?</p>
+  <ol class="opts-l"><li><code>cartridge/templates/default/contato.xml</code></li><li><code>cartridge/forms/default/contato.xml</code></li><li><code>cartridge/scripts/forms/contato.js</code></li><li>No BM</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Ou numa pasta de locale, como <code>forms/pt_BR/</code>.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Quais middlewares protegem um formulário AJAX de alteração de perfil contra CSRF?</p>
+  <ol class="opts-l"><li><code>server.middleware.https</code> nas duas rotas</li><li><code>csrfProtection.generateToken</code> na rota que exibe e <code>csrfProtection.validateAjaxRequest</code> na que recebe</li><li><code>userLoggedIn.validateLoggedIn</code></li><li><code>cache.applyDefaultCache</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> HTTPS e login também são desejáveis, mas não tratam CSRF.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Um usuário reabre o formulário de endereço e vê os dados digitados na tentativa anterior. Por quê?</p>
+  <ol class="opts-l"><li>Cache do navegador</li><li>O form em memória persiste na sessão; faltou <code>clear()</code> na exibição</li><li>Page cache</li><li>Replicação</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> A documentação: o objeto persiste durante a sessão até ser limpo explicitamente.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Como a documentação do SFRA recomenda gravar dados de um form validado?</p>
+  <ol class="opts-l"><li>Direto no template</li><li>Num listener de <code>route:BeforeComplete</code>, dentro de <code>Transaction.wrap</code></li><li>Com <code>copyTo()</code> sempre</li><li>Num job</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> É o padrão de <code>Account-SaveProfile</code> e <code>SavePassword</code>.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">O endereço italiano precisa de campos diferentes. Qual é a solução do framework?</p>
+  <ol class="opts-l"><li>Um if no template</li><li>Uma definition <code>address.xml</code> em <code>forms/it_IT/</code></li><li>Um form com outro nome</li><li>JavaScript no cliente</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Mesmo nome em pastas de locale; sem pasta do locale, vale <code>default</code>.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/sfra/guide/b2c-forms.html">SFRA: Forms</a>: definition, getForm, localização, validação, gravação, prepopulação, CSRF.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-forms.html">B2C Commerce: Forms</a></li>
+  <li>XSD oficial <code>form.xsd</code> (b2c CLI: <code>b2c docs schema form</code>): elementos e atributos.</li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/scriptapi/html/index.html?target=class_dw_web_CSRFProtection.html">Script API: CSRFProtection</a>, <code>dw.web.Form</code>, <code>FormField</code>.</li>
+  <li>Código do SFRA: <code>modules/server/forms/*.js</code>, <code>scripts/middleware/csrf.js</code>, <code>scripts/formErrors.js</code>, <code>controllers/Account.js</code>, <code>forms/default/profile.xml</code>, <code>client/default/js/components/formValidation.js</code>.</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

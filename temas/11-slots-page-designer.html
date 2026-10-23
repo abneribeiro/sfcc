@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>11 · Content Slots e Page Designer · Guia SFCC</title>
+<meta name="description" content="Content assets, content slots (isslot, contextos, slot configurations, rendering templates, regras de exibição, cache) e Page Designer (page types, component types, meta JSON, script render, regions, attribute types, aspects, PageMgr, cache por fingerprint, artefatos de UI).">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="11" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>Content Slots e Page Designer</h1>
+  <p class="lead">Os dois mecanismos que dão ao merchant controle sobre a aparência do site sem deploy. Com <strong>content slots</strong>, o desenvolvedor marca lugares fixos nos templates e o merchant escolhe o que aparece em cada um, quando e para quem. Com o <strong>Page Designer</strong>, o desenvolvedor cria tipos de página e de componente reutilizáveis e o merchant monta páginas inteiras arrastando componentes num editor visual. Este tema implementa os dois, do template ao cache.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>Library</dt><dd>Biblioteca de conteúdo: content assets, folders e, no Page Designer, páginas e componentes. Pode ser privada (de um site) ou compartilhada.</dd>
+  <dt>Content asset</dt><dd>Bloco de conteúdo editável no BM (HTML, atributos custom), identificado por um ID (<code>aid</code>/<code>cid</code>).</dd>
+  <dt>Content slot</dt><dd>Lugar fixo num template, declarado com <code>&lt;isslot&gt;</code>, com um ID e um contexto (global, category ou folder).</dd>
+  <dt>Slot configuration</dt><dd>Configuração do merchant para um slot: tipo de conteúdo (produtos, categorias, assets, HTML, recomendações), rendering template, agenda, customer groups, rank, default.</dd>
+  <dt>Rendering template</dt><dd>ISML que desenha o conteúdo de uma slot configuration, usando a variável <code>slotcontent</code>.</dd>
+  <dt>Page type / component type</dt><dd>Definições do desenvolvedor para o Page Designer: arquivo JSON (meta definition) + script <code>.js</code> com <code>render()</code> (+ ISML).</dd>
+  <dt>Region</dt><dd>Área de uma página ou componente onde o merchant solta componentes.</dd>
+  <dt>Aspect type</dt><dd>Contrato de página dinâmica (ex.: <code>plp</code>, <code>pdp</code>), que recebe a categoria ou o produto em tempo de execução.</dd>
+  <dt>Visual editor</dt><dd>O editor do Page Designer no BM (<em>Merchant Tools &gt; Content &gt; Page Designer</em>).</dd>
+</dl>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="escolher" data-k="cap. 2">
+<h2>Slots, Page Designer ou content asset?</h2>
+<div class="prose">
+<table>
+<thead><tr><th></th><th>Content asset</th><th>Content slot</th><th>Page Designer</th></tr></thead>
+<tbody>
+<tr><td>O dev define</td><td>Onde o asset aparece (<code>&lt;iscontentasset&gt;</code> ou <code>Page-Show</code>)</td><td>O lugar (<code>&lt;isslot&gt;</code>) e os rendering templates</td><td>Tipos de página e componentes</td></tr>
+<tr><td>O merchant define</td><td>O conteúdo do asset</td><td>O que aparece no lugar, quando e para quem</td><td>O layout inteiro da página</td></tr>
+<tr><td>Agenda e segmentação</td><td>Online/offline</td><td>Sim (schedule, customer groups, rank, campanhas, A/B)</td><td>Sim (visibilidade de páginas e componentes)</td></tr>
+<tr><td>Bom para</td><td>Textos institucionais, rodapé, políticas</td><td>Banners e vitrines em posições fixas de páginas existentes</td><td>Landing pages, home, páginas de campanha, layouts de PLP/PDP</td></tr>
+</tbody>
+</table>
+<p>As abordagens convivem. O próprio SFRA mostra isso: <code>Home-Show</code> renderiza a página <code>homepage</code> do Page Designer, se ela existir e estiver visível; senão, o template <code>home/homePage</code> com slots. <code>Search-Show</code> usa uma página de categoria do Page Designer quando há uma atribuída.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="assets" data-k="cap. 3">
+<h2>Content assets e folders</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="isml" data-file="três formas de exibir um content asset no SFRA">
+<iscomment> 1) custom tag do SFRA (declarada em components/modules.isml) </iscomment>
+<iscontentasset aid="footer-about-us" />
+
+<iscomment> 2) link para a página do asset (rota Page-Show do base) </iscomment>
+<a href="${URLUtils.url('Page-Show', 'cid', 'shipping-policy')}">${Resource.msg('link.shipping', 'common', null)}</a>
+
+<iscomment> 3) remote include, quando o asset precisa de cache próprio </iscomment>
+<isinclude url="${URLUtils.url('Page-Include', 'cid', 'cookie_hint')}" />
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="lendo um asset pela API">
+var ContentMgr = require('dw/content/ContentMgr');
+var asset = ContentMgr.getContent('size-chart-shoes');      // da library do site
+if (asset && asset.online) {
+    var html = asset.custom.body ? asset.custom.body.markup : ''; // "body" é atributo custom (MarkupText)
+}
+var folder = ContentMgr.getFolder('help');                   // folders organizam assets (e geram navegação)
+</script>
+<p>O guia de assets do SFRA lembra que o corpo de um asset é markup editado pelo merchant e é impresso com <code>encoding="off"</code> no template <code>components/content/contentAsset.isml</code>. Por isso só usuários confiáveis devem ter permissão de editar conteúdo.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="slots" data-k="cap. 4">
+<h2>Content slots</h2>
+<div class="prose">
+<h3 id="isslot">Declarando o slot</h3>
+<table>
+<thead><tr><th>Atributo</th><th>Obrigatório</th><th>Notas</th></tr></thead>
+<tbody>
+<tr><td><code>id</code></td><td>Sim</td><td>String literal (sem expressão): o merchant cria configurações para este ID</td></tr>
+<tr><td><code>context</code></td><td>Sim</td><td><code>global</code> (todas as páginas), <code>category</code> ou <code>folder</code></td></tr>
+<tr><td><code>context-object</code></td><td>Para category e folder</td><td>Expressão que resolve para a categoria ou a folder. No global, pode ser um produto, a basket ou uma coleção de até 5 produtos (recomendações)</td></tr>
+<tr><td><code>description</code></td><td>Sim</td><td>Texto que o merchant vê no BM</td></tr>
+<tr><td><code>preview-url</code></td><td>Não</td><td>URL de pré-visualização no BM</td></tr>
+</tbody>
+</table>
+<script type="text/plain" class="src" data-lang="isml" data-file="templates/default/home/homePage.isml e search/searchResults.isml (trechos)">
+<iscomment> global: o mesmo slot em qualquer página que inclua o template </iscomment>
+<isslot id="home-main-m" description="Banner principal da home (1440x600)" context="global" />
+
+<iscomment> category: uma configuração por categoria (e herança via template da categoria) </iscomment>
+<isslot id="cat-banner-m"
+        context="category"
+        description="Banner do topo da PLP"
+        context-object="${pdict.productSearch.category ? pdict.productSearch.category.raw : null}" />
+</script>
+<aside class="callout" data-kind="warn">
+<p>O BM descobre os slots <strong>varrendo os templates</strong> dos cartridges do path. Um slot de categoria ou folder dentro de um template incluído localmente não aparece na lista. O contorno documentado é declarar o mesmo slot no template de renderização da categoria dentro de <code>&lt;isif condition="${false}"&gt;</code>, só para o BM enxergá-lo. Slots sem configuração não renderizam nada e geram uma linha de log.</p>
+</aside>
+
+<h3 id="slot-config">Slot configurations (BM)</h3>
+<p>Em <em>Merchant Tools &gt; Online Marketing &gt; Content Slots</em>, o merchant cria, para cada slot, uma ou mais configurações com:</p>
+<ul>
+  <li><strong>Content type</strong>: Products (até 20), Categories, Content Assets, HTML ou Recommendations.</li>
+  <li><strong>Rendering template</strong>: o ISML que o desenvolvedor criou para aquele tipo de conteúdo.</li>
+  <li><strong>Schedule</strong> (datas, dias, horários), <strong>customer groups</strong>, <strong>rank</strong>, a flag <strong>default</strong>, e opcionalmente a associação a uma campanha ou A/B test.</li>
+</ul>
+<p>Qual configuração aparece? Pela tabela oficial de troubleshooting: sem default e sem agenda, nada aparece; o default aparece quando nenhuma agendada vale; uma agendada válida vence o default; entre várias válidas, vence o <strong>menor rank</strong> (qualquer rank vence "sem rank"); empate, vence a <strong>editada por último</strong>. Uma configuração com customer group <em>Everyone</em> tem precedência menor que configurações com outros grupos. Boa prática: sempre ter uma configuração <strong>default</strong>.</p>
+
+<h3 id="rendering">Rendering templates e slotcontent</h3>
+<p>Dentro do rendering template existe a variável <code>slotcontent</code> (<code>dw.campaign.SlotContent</code>): <code>slotcontent.content</code> (a coleção de produtos, categorias ou assets), <code>slotcontent.slotID</code>, <code>slotcontent.callout</code> (MarkupText) e <code>slotcontent.custom</code>.</p>
+<script type="text/plain" class="src" data-lang="isml" data-file="app_custom_acme/cartridge/templates/default/slots/product/productCarousel.isml">
+<iscomment>
+    Rendering template para slot configurations do tipo "Products".
+    Cada produto vira um tile (remote include, cacheado pelo Tile-Show).
+</iscomment>
+<isif condition="${slotcontent && !empty(slotcontent.content)}">
+    <div class="acme-slot-carousel" data-slot="${slotcontent.slotID}">
+        <isif condition="${slotcontent.callout}">
+            <h2 class="slot-title"><isprint value="${slotcontent.callout}" encoding="off" /></h2>
+        </isif>
+        <div class="row">
+            <isloop items="${slotcontent.content}" var="product" end="7">
+                <div class="col-6 col-md-3">
+                    <isinclude url="${URLUtils.url('Tile-Show', 'pid', product.ID, 'swatches', true, 'ratings', true)}" />
+                </div>
+            </isloop>
+        </div>
+    </div>
+</isif>
+</script>
+<script type="text/plain" class="src" data-lang="isml" data-file="app_storefront_base/cartridge/templates/default/slots/html/htmlSlotContainer.isml (padrão para HTML)">
+<isif condition="${slotcontent != null}">
+    <isloop items="${slotcontent.content}" var="markupText">
+        <isprint value="${markupText.markup}" encoding="off"/>
+    </isloop>
+</isif>
+</script>
+
+<h3 id="slot-cache">Cache de slots</h3>
+<p>A plataforma cacheia o HTML de cada slot de 0 a 59 minutos, conforme a próxima ativação ou desativação de configuração agendada: em geral 59 minutos, menos quando uma configuração está prestes a entrar ou sair. Slots com <strong>recomendações</strong> não são cacheados. Por isso uma mudança de configuração pode demorar alguns minutos para aparecer, além do page cache da página.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="pd-arquitetura" data-k="cap. 5">
+<h2>Page Designer: arquitetura</h2>
+<div class="prose">
+<p>O processo típico, segundo a documentação: o diretor de e-commerce e o desenvolvedor definem páginas, componentes e layouts; o desenvolvedor cria os <strong>page types</strong> e <strong>component types</strong> reutilizáveis e sobe <strong>dois cartridges</strong> (um com os tipos e outro com os artefatos de UI: traduções e thumbnails, no path do Business Manager); o merchant monta as páginas no visual editor.</p>
+<script type="text/plain" class="src" data-lang="text" data-file="onde cada peça mora">
+app_custom_acme/cartridge/
+├── experience/
+│   ├── pages/
+│   │   ├── campaignPage.json          # meta definition do page type (regions, atributos)
+│   │   └── campaignPage.js            # render(context): monta o HTML (via dw.util.Template)
+│   ├── components/
+│   │   └── acme_assets/
+│   │       ├── promoStrip.json        # meta definition do component type (atributos, regions)
+│   │       └── promoStrip.js          # render(context)
+│   └── aspects/                       # aspect types de páginas dinâmicas (plp.json, pdp.json…)
+└── templates/default/experience/
+    ├── pages/campaignPage.isml
+    └── components/acme_assets/promoStrip.isml
+
+bm_acme_pd/cartridge/                  # artefatos de UI (cartridge path do Business Manager)
+├── templates/resources/experience/components/acme_assets/promoStrip_pt_BR.properties
+└── static/default/experience/components/acme_assets/promoStrip.png   # thumbnail no editor
+</script>
+<ul>
+  <li><strong>ID do tipo</strong> = subpastas + nome do arquivo, separados por pontos: <code>experience/components/acme_assets/promoStrip.json</code> → <code>acme_assets.promoStrip</code>. Nomes só com letras, números e underscore; o ID com o prefixo <code>component.</code>/<code>page.</code> não pode passar de 256 caracteres.</li>
+  <li>O script tem o <strong>mesmo nome</strong> do JSON, com <code>.js</code>, na mesma pasta, e exporta <code>render</code>.</li>
+  <li>O <code>render</code> devolve uma <strong>string</strong>: use <code>dw.util.Template(...).render(model).text</code>, nunca <code>dw.template.ISML</code> (que escreve direto na resposta).</li>
+  <li>No editor (BM), páginas nunca são cacheadas; no storefront, valem as regras de cache do capítulo 9.</li>
+</ul>
+<script type="text/plain" class="mmd" data-caption="renderização de uma página do Page Designer">
+flowchart TB
+  C["Controller<br/>Page-Show?cid=black-friday"] --> PM["PageMgr.renderPage(id, params)<br/>(no SFRA: res.page)"]
+  PM --> PS["page type script<br/>campaignPage.js render(context)"]
+  PS --> PT["ISML da página<br/>regions.main.render()"]
+  PT --> RR["PageMgr.renderRegion(region)"]
+  RR --> CS1["component script render()"] --> CT1["ISML do componente"]
+  RR --> CS2["layout com regions próprias"] --> RR2["renderRegion(sub-region)"]
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="pd-componente" data-k="cap. 6">
+<h2>Criando um component type completo</h2>
+<div class="prose">
+<p>Exemplo: uma faixa promocional com texto rico, imagem, link para categoria, cor de fundo e uma data limite.</p>
+<script type="text/plain" class="src" data-lang="json" data-file="app_custom_acme/cartridge/experience/components/acme_assets/promoStrip.json">
+{
+    "name": "Faixa promocional",
+    "description": "Texto + imagem + link para categoria, com contagem regressiva opcional.",
+    "group": "acme_assets",
+    "attribute_definition_groups": [
+        {
+            "id": "content",
+            "name": "Conteúdo",
+            "attribute_definitions": [
+                { "id": "headline", "name": "Título", "type": "markup", "required": true },
+                { "id": "image", "name": "Imagem", "type": "image", "required": false },
+                { "id": "category", "name": "Categoria do link", "type": "category", "required": true },
+                { "id": "ctaLabel", "name": "Texto do botão", "type": "string", "required": false, "default_value": "Ver ofertas" }
+            ]
+        },
+        {
+            "id": "style",
+            "name": "Aparência",
+            "attribute_definitions": [
+                { "id": "theme", "name": "Tema", "type": "enum", "values": ["claro", "escuro"], "required": true, "default_value": "claro" },
+                { "id": "endsAt", "name": "Termina em (AAAA-MM-DD)", "type": "string", "required": false },
+                { "id": "showCountdown", "name": "Mostrar contagem regressiva", "type": "boolean", "required": false }
+            ]
+        }
+    ],
+    "region_definitions": []
+}
+</script>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/experience/components/acme_assets/promoStrip.js">
+'use strict';
+
+var Template = require('dw/util/Template');
+var HashMap = require('dw/util/HashMap');
+var URLUtils = require('dw/web/URLUtils');
+
+/**
+ * @param {dw.experience.ComponentScriptContext} context
+ *   context.content: atributos do merchant, já resolvidos
+ *   (category → dw.catalog.Category, image → dw.experience.image.Image, markup → string)
+ * @returns {string} markup do componente
+ */
+module.exports.render = function (context) {
+    var content = context.content;
+    var model = new HashMap();
+
+    model.headline = content.headline;
+    model.imageUrl = content.image ? content.image.file.absURL.toString() : null;
+    model.link = URLUtils.url('Search-Show', 'cgid', content.category.ID).toString();
+    model.ctaLabel = content.ctaLabel;
+    model.themeClass = content.theme === 'escuro' ? 'promo-strip--dark' : 'promo-strip--light';
+    model.endsAt = content.showCountdown && content.endsAt ? content.endsAt : null;
+
+    // o componente não lê dados do comprador: pode ser cacheado junto com a página (cap. 9)
+    return new Template('experience/components/acme_assets/promoStrip').render(model).text;
+};
+</script>
+<script type="text/plain" class="src" data-lang="isml" data-file="app_custom_acme/cartridge/templates/default/experience/components/acme_assets/promoStrip.isml">
+<isscript>
+    var assets = require('*/cartridge/scripts/assets.js');
+    assets.addCss('/css/experience/promoStrip.css');
+</isscript>
+<div class="promo-strip ${pdict.themeClass}">
+    <isif condition="${pdict.imageUrl}">
+        <img class="promo-strip__img" src="${pdict.imageUrl}" alt="" loading="lazy" />
+    </isif>
+    <div class="promo-strip__text"><isprint value="${pdict.headline}" encoding="off" /></div>
+    <isif condition="${pdict.endsAt}">
+        <span class="promo-strip__countdown" data-ends-at="${pdict.endsAt}"></span>
+    </isif>
+    <a class="btn btn-primary" href="${pdict.link}"><isprint value="${pdict.ctaLabel}" /></a>
+</div>
+</script>
+
+<h3 id="tipos-atributo">Tipos de atributo e o valor que o script recebe</h3>
+<table>
+<thead><tr><th>type</th><th>Controle no editor</th><th>Valor em <code>context.content</code></th></tr></thead>
+<tbody>
+<tr><td><code>string</code> / <code>text</code></td><td>Campo / área de texto</td><td>String</td></tr>
+<tr><td><code>markup</code></td><td>Editor de texto rico</td><td>String HTML</td></tr>
+<tr><td><code>boolean</code>, <code>integer</code></td><td>Checkbox, campo</td><td>Boolean, número</td></tr>
+<tr><td><code>enum</code></td><td>Select (valores em <code>values</code>)</td><td>String ou inteiro</td></tr>
+<tr><td><code>file</code></td><td>Seletor de arquivo da library</td><td><code>dw.content.MediaFile</code></td></tr>
+<tr><td><code>image</code></td><td>Seletor de imagem com ponto focal</td><td><code>dw.experience.image.Image</code></td></tr>
+<tr><td><code>category</code></td><td>Seletor de categoria</td><td><code>dw.catalog.Category</code></td></tr>
+<tr><td><code>product</code></td><td>Seletor de produto</td><td><code>dw.catalog.Product</code></td></tr>
+<tr><td><code>page</code></td><td>Seletor de página</td><td><code>dw.experience.Page</code></td></tr>
+<tr><td><code>url</code></td><td>Seletor de URL</td><td>String</td></tr>
+<tr><td><code>custom</code></td><td>Textarea ou editor customizado (<code>editor_definition</code>)</td><td><code>dw.util.Map</code> (JSON)</td></tr>
+<tr><td><code>cms_record</code></td><td>Registro do Salesforce CMS</td><td><code>dw.experience.CMSRecord</code></td></tr>
+</tbody>
+</table>
+<p>Sobre <code>required</code> e <code>default_value</code>: o default é usado na renderização e no preview, mas <strong>não aparece pré-selecionado</strong> no editor. O editor só bloqueia o salvamento quando o atributo é obrigatório e não tem default.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="pd-pagina" data-k="cap. 7">
+<h2>Page types, regions e layouts</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="json" data-file="app_custom_acme/cartridge/experience/pages/campaignPage.json">
+{
+    "name": "Página de campanha",
+    "description": "Hero no topo, conteúdo livre no meio e vitrine de produtos no fim.",
+    "region_definitions": [
+        {
+            "id": "hero",
+            "name": "Hero",
+            "max_components": 1,
+            "component_type_inclusions": [
+                { "type_id": "commerce_assets.mainBanner" },
+                { "type_id": "acme_assets.promoStrip" }
+            ]
+        },
+        {
+            "id": "main",
+            "name": "Conteúdo",
+            "component_type_exclusions": [ { "type_id": "commerce_assets.campaignBanner" } ],
+            "default_component_constructors": [
+                { "type_id": "commerce_assets.editorialRichText", "name": "Texto da campanha" }
+            ]
+        },
+        { "id": "products", "name": "Vitrine" }
+    ],
+    "attribute_definition_groups": [
+        {
+            "id": "seo",
+            "name": "SEO",
+            "attribute_definitions": [
+                { "id": "metaTitle", "name": "Título da página", "type": "string", "required": false }
+            ]
+        }
+    ]
+}
+</script>
+<ul>
+  <li><code>max_components</code> limita quantos componentes são <strong>renderizados</strong> ao mesmo tempo (a region pode guardar mais, com agendas e visibilidades diferentes).</li>
+  <li><code>component_type_inclusions</code> (lista do que é permitido) ou <code>component_type_exclusions</code> (lista do que é proibido) controlam o que cabe na region. Pelo JSON schema oficial (<code>regiondefinition.json</code>), uma mesma region usa <strong>uma das duas</strong>, nunca ambas.</li>
+  <li><code>default_component_constructors</code> já preenche a region quando o merchant cria a página: uma boa prática documentada.</li>
+  <li>Componentes de <strong>layout</strong> (como os <code>commerce_layouts.*</code> do SFRA) são component types com <code>region_definitions</code> próprias.</li>
+</ul>
+<script type="text/plain" class="src" data-lang="js" data-file="app_custom_acme/cartridge/experience/pages/campaignPage.js">
+'use strict';
+
+var Template = require('dw/util/Template');
+var HashMap = require('dw/util/HashMap');
+var PageRenderHelper = require('*/cartridge/experience/utilities/PageRenderHelper.js');
+
+/** @param {dw.experience.PageScriptContext} context  (page, renderParameters, content) */
+module.exports.render = function (context) {
+    var model = new HashMap();
+    var page = context.page;
+    model.page = page;
+    model.content = context.content;                                 // atributos da página (metaTitle)
+    model.regions = PageRenderHelper.getRegionModelRegistry(page);    // helper do SFRA: um RegionModel por region
+    model.CurrentPageMetaData = PageRenderHelper.getPageMetaData(page);
+    return new Template('experience/pages/campaignPage').render(model).text;
+};
+</script>
+<script type="text/plain" class="src" data-lang="isml" data-file="app_custom_acme/cartridge/templates/default/experience/pages/campaignPage.isml">
+<iscontent type="text/html" charset="UTF-8" compact="true" />
+<isdecorate template="common/layout/pdStorePage">
+    <div class="campaign-page" id="${pdict.page.ID}">
+        <isprint value="${pdict.regions.hero.render()}" encoding="off" />
+        <div class="container">
+            <isprint value="${pdict.regions.main.setClassName('campaign-main').render()}" encoding="off" />
+            <isprint value="${pdict.regions.products.setClassName('row').setComponentClassName('col-6 col-md-3').render()}" encoding="off" />
+        </div>
+    </div>
+</isdecorate>
+</script>
+<p>Sem o helper do SFRA, a forma "crua" é <code>&lt;isprint value="${PageMgr.renderRegion(pdict.page.getRegion('main'))}" encoding="off"/&gt;</code>. O HTML de envoltório padrão é <code>&lt;div class="experience-region experience-main"&gt;</code> e, para cada componente, <code>&lt;div class="experience-component experience-acme_assets-promoStrip"&gt;</code> (os pontos do ID viram hífens). Para mudar tags e classes, use <code>dw.experience.RegionRenderSettings</code> e <code>ComponentRenderSettings</code> (é o que o <code>setClassName</code> do helper faz).</p>
+
+<h3 id="publicar">Exibindo a página no storefront</h3>
+<p>No SFRA, a rota <code>Page-Show?cid=…</code> já renderiza páginas do Page Designer (é a recomendação oficial, porque aproveita as SEO URLs de conteúdo). O núcleo:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="trecho equivalente ao Page-Show do SFRA">
+var PageMgr = require('dw/experience/PageMgr');
+var page = PageMgr.getPage(req.querystring.cid);
+
+if (page && page.isVisible()) {                     // online, agenda e customer groups
+    if (page.hasVisibilityRules()) {
+        res.cachePeriod = 0;                         // a página varia por comprador: não cachear a casca
+    }
+    res.page(page.ID, {});                           // PageMgr.renderPage dentro do server do SFRA
+} else {
+    // fallback: content asset de mesmo ID ou 404
+}
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="dinamicas" data-k="cap. 8">
+<h2>Páginas dinâmicas: aspects, PLP e PDP</h2>
+<div class="prose">
+<p>Uma página dinâmica recebe dados em tempo de execução. O desenvolvedor cria um <strong>aspect type</strong> (em <code>experience/aspects</code>) que declara os atributos necessários e o tipo de objeto a que o merchant pode atribuir a página (<code>category</code> ou <code>product</code>). O page type declara <code>supported_aspect_types</code>. O SFRA traz os aspects <code>plp</code> e <code>pdp</code> e os page types <code>productList</code> e <code>productDetail</code>.</p>
+<script type="text/plain" class="src" data-lang="json" data-file="app_storefront_base/cartridge/experience/aspects/plp.json (exemplo da documentação)">
+{
+    "name": "Product List Page",
+    "description": "The product list page for a given category.",
+    "attribute_definitions": [
+        { "id": "category", "name": "Category", "type": "category" }
+    ],
+    "supported_object_types": [ "category" ]
+}
+</script>
+<p>Um atributo de componente com <code>"dynamic_lookup": { "aspect_attribute_alias": "category" }</code> recebe a categoria da página automaticamente (o merchant ainda pode sobrescrevê-la). No controller:</p>
+<script type="text/plain" class="src" data-lang="js" data-file="renderizando uma PLP do Page Designer">
+var PageMgr = require('dw/experience/PageMgr');
+var HashMap = require('dw/util/HashMap');
+var CatalogMgr = require('dw/catalog/CatalogMgr');
+
+var category = CatalogMgr.getCategory(req.querystring.cgid);
+// procura uma página atribuída à categoria (subindo a árvore até a raiz) para o aspect "plp"
+var page = PageMgr.getPage(category, true, 'plp');
+if (page) {
+    var aspectAttributes = new HashMap();
+    aspectAttributes.put('category', category);
+    res.page(page.ID, {}, aspectAttributes);   // SFRA; equivale a PageMgr.renderPage(page.ID, aspectAttributes, params)
+}
+</script>
+<p>É exatamente o que <code>Search-Show</code> do SFRA faz com <code>searchHelper.getPageDesignerCategoryPage(cgid)</code>, zerando o cache da rota quando a página tem regras de visibilidade.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="pd-cache" data-k="cap. 9">
+<h2>Cache e performance no Page Designer</h2>
+<div class="prose">
+<p>A renderização acontece dentro de <strong>dois remote includes aninhados</strong> do sistema:</p>
+<ol class="steps">
+  <li><code>__SYSTEM__Page-Include</code> calcula a <em>visibility fingerprint</em> (quais componentes estão visíveis para este contexto: agendas, customer groups). Só é cacheado se a página e os componentes <strong>não</strong> tiverem regras de visibilidade; o TTL fica em <em>Manage Sites &gt; (site) &gt; Cache &gt; Time to Live of Page Designer Fingerprint</em> (padrão de 24h).</li>
+  <li><code>__SYSTEM__Page-Render</code> (ou <code>-Serialize</code>, para JSON) roda os scripts <code>render</code> e é cacheado conforme as instruções de cache que <strong>a página ou os componentes</strong> definem, com a fingerprint como parte da chave.</li>
+</ol>
+<ul>
+  <li>Sem nenhuma instrução de cache no page type e nos componentes, a página <strong>não é cacheada</strong>. Com várias, vale a <strong>menor</strong>.</li>
+  <li>Nos scripts de render, use <code>response.setExpires(...)</code> e, se personalizado, <code>response.setVaryBy('price_promotion')</code>. Não use <code>&lt;iscache&gt;</code> em templates renderizados via <code>dw.util.Template</code>.</li>
+  <li>Conteúdo que não pode seguir o cache da página (estoque em tempo real, dado do comprador) vai num remote include dentro do componente.</li>
+  <li>Cabeçalhos ou cookies definidos durante o render <strong>não</strong> chegam à resposta do controller que chamou <code>renderPage</code>.</li>
+</ul>
+<script type="text/plain" class="src" data-lang="js" data-file="componente que declara o próprio cache">
+module.exports.render = function (context) {
+    var expiry = new Date();
+    expiry.setHours(expiry.getHours() + 1);
+    response.setExpires(expiry);           // 1h; afeta a página inteira (vale o menor entre os componentes)
+    response.setVaryBy('price_promotion'); // o componente mostra preço e promoção
+    // ...
+    return new (require('dw/util/Template'))('experience/components/acme_assets/dealOfDay').render(model).text;
+};
+</script>
+<h3 id="pd-limites">Limites e atualizações de tipos</h3>
+<ul>
+  <li>A saída de uma página renderizada pelo Page Designer é limitada a <strong>3 MB</strong>; acima disso a página fica em branco (o log é interno). Evite componentes que listam categorias enormes.</li>
+  <li>A documentação recomenda manter o aninhamento de componentes em <strong>5 níveis ou menos</strong>.</li>
+  <li>Definições de tipos ficam em memória: em sandbox, Development e Staging atualizam em cerca de 5 segundos ou com troca de code version; em <strong>Production, só com troca de code version</strong>.</li>
+  <li>Cuidado ao mudar meta definitions depois que existem páginas: mudar o <code>type</code> de um atributo cria inconsistência com os dados salvos. Crie um componente novo e deprecie o antigo.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="pd-ui" data-k="cap. 10">
+<h2>Artefatos de UI e editores customizados</h2>
+<div class="prose">
+<p>Nomes, descrições e thumbnails que o merchant vê no editor vêm de um cartridge no path do <strong>Business Manager</strong>:</p>
+<script type="text/plain" class="src" data-lang="properties" data-file="bm_acme_pd/cartridge/templates/resources/experience/components/acme_assets/promoStrip_pt_BR.properties">
+name=Faixa promocional
+description=Texto, imagem e botão para uma categoria, com contagem regressiva opcional.
+attribute_definition_group.content.name=Conteúdo
+attribute_definition.headline.name=Título
+attribute_definition.category.name=Categoria do link
+attribute_definition.theme.name=Tema
+</script>
+<ul>
+  <li>Resource bundles: <code>templates/resources/experience/pages/…</code>, <code>…/components/…</code> e <code>…/componentgroups/&lt;grupo&gt;_&lt;locale&gt;.properties</code> (com <code>name=</code>).</li>
+  <li>Thumbnails: <code>static/default/images/experience/pages/&lt;subpasta&gt;/&lt;id&gt;.png</code> para páginas e <code>static/default/experience/components/&lt;subpasta&gt;/&lt;id&gt;.png</code> para componentes.</li>
+  <li><strong>Custom attribute editors</strong>: para um atributo <code>type: "custom"</code>, o <code>editor_definition.type</code> aponta para um editor em <code>experience/editors/…</code> (meta JSON + script + JS e CSS de cliente) que roda dentro do visual editor e conversa por eventos (<code>subscribe</code>/<code>emit</code>). Também existem editores "breakout", abertos em modal.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong>Usar <code>dw.template.ISML.renderTemplate</code> no <code>render</code> de componente.</strong> Ele escreve na resposta em vez de devolver string. Use <code>dw.util.Template</code>.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Componente que lê o comprador</strong> (nome, carrinho) sem remote include. A página inteira passa a variar por comprador, ou mostra o dado errado.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Slot de categoria declarado só num include local.</strong> O BM não o encontra.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Mudar o <code>type</code> de um atributo</strong> de um componente já usado. Crie outro tipo e deprecie o antigo.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>Contextos de <code>&lt;isslot&gt;</code>: <strong>global</strong>, <strong>category</strong>, <strong>folder</strong>; <code>context-object</code> é obrigatório para category e folder.</li>
+  <li>Variável do rendering template: <strong><code>slotcontent</code></strong>.</li>
+  <li>Configuração exibida: agenda válida vence o default; menor rank vence; empate, a editada por último.</li>
+  <li>Page Designer = <strong>JSON (meta definition) + JS (render) + ISML</strong>; ID = caminho com pontos.</li>
+  <li>Regions: <code>max_components</code>, <code>component_type_inclusions</code>/<code>exclusions</code>, <code>default_component_constructors</code>.</li>
+  <li>Página dinâmica = <strong>aspect type</strong> + <code>supported_aspect_types</code> + <code>PageMgr.getPage(category, true, 'plp')</code>.</li>
+  <li>Tipos novos em Production só valem depois de <strong>troca de code version</strong>.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>Slot não aparece no BM</td><td>Template com <code>&lt;isslot&gt;</code> fora do path; slot de categoria num include local</td><td>Confira o path; use o contorno do <code>&lt;isif condition="${false}"&gt;</code>.</td></tr>
+<tr><td>Slot vazio no storefront</td><td>Nenhuma configuração ativa (sem default, agenda vencida, customer group não bate)</td><td>Crie uma configuração default; confira agenda, grupos e rank. Use a Content Information Tool do Storefront Toolkit.</td></tr>
+<tr><td>Configuração nova demora a aparecer</td><td>Cache do slot (até 59 min) e page cache</td><td>Aguarde ou invalide o cache; teste em sandbox com cache desligado.</td></tr>
+<tr><td>"Template not found" em vermelho no BM</td><td>Rendering template da configuração não existe no path</td><td>Corrija o caminho do template.</td></tr>
+<tr><td>Componente novo não aparece no editor</td><td>JSON inválido; script com nome diferente; cartridge fora do path; em Production, sem troca de code version</td><td>Valide o JSON contra os schemas, confira nomes e path, troque a code version.</td></tr>
+<tr><td>Página do Page Designer em branco</td><td>Erro no <code>render</code>; saída acima de 3 MB</td><td>Leia o <code>customerror</code>; reduza o conteúdo.</td></tr>
+<tr><td>Página do Page Designer nunca cacheada</td><td>Nenhum componente define cache; regras de visibilidade</td><td>Defina <code>response.setExpires</code> no page type; isole o variável em remote includes. Use a Cache Information do toolkit ("Internal - Page Designer").</td></tr>
+<tr><td>Mock placeholder no editor</td><td>Componente sem os atributos obrigatórios, ou com erro de render</td><td>Configure os atributos; leia o log.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Escolher entre content asset, slot e Page Designer para um requisito.</li>
+  <li>Declarar <code>&lt;isslot&gt;</code> nos três contextos e escrever rendering templates com <code>slotcontent</code>.</li>
+  <li>Explicar como uma slot configuration é escolhida (default, agenda, rank, edição) e o cache de slots.</li>
+  <li>Criar component types e page types (JSON + JS + ISML), com atributos, regions e defaults.</li>
+  <li>Conhecer os tipos de atributo e o objeto que cada um entrega ao script.</li>
+  <li>Renderizar páginas pelo controller (<code>res.page</code>, <code>PageMgr</code>) e páginas dinâmicas com aspects.</li>
+  <li>Explicar o cache do Page Designer (fingerprint, menor TTL entre os componentes, <code>response.setExpires</code>).</li>
+  <li>Entregar resource bundles e thumbnails num cartridge de BM.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Qual atributo é obrigatório num <code>&lt;isslot&gt;</code> de contexto <code>category</code> que não seria num slot global?</p>
+  <ol class="opts-l"><li><code>preview-url</code></li><li><code>context-object</code></li><li><code>template</code></li><li><code>rank</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O <code>context-object</code> resolve a categoria cuja configuração deve ser usada.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Duas slot configurations estão agendadas para agora: X com rank 10 e Y com rank 20. Qual aparece?</p>
+  <ol class="opts-l"><li>Y</li><li>X</li><li>As duas</li><li>A default</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O menor rank tem prioridade; em empate, vence a editada por último.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Quais arquivos um component type precisa no cartridge de código?</p>
+  <ol class="opts-l"><li>Só um ISML</li><li>Meta definition JSON + script .js com <code>render</code> (de mesmo nome e pasta), normalmente com um ISML</li><li>Um XML de import</li><li>Um controller</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> O resource bundle e o thumbnail são opcionais e ficam no cartridge de UI.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual é o ID de um componente em <code>cartridge/experience/components/acme/banners/hero.json</code>?</p>
+  <ol class="opts-l"><li><code>hero</code></li><li><code>acme.banners.hero</code></li><li><code>components/acme/banners/hero</code></li><li><code>acme_banners_hero</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Subpastas e nome do arquivo separados por pontos, sem extensão.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Num atributo <code>"type": "category"</code>, o que o script recebe em <code>context.content</code>?</p>
+  <ol class="opts-l"><li>O ID da categoria (string)</li><li>Um <code>dw.catalog.Category</code></li><li>Um JSON</li><li>Uma URL</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Os valores são resolvidos para objetos da API (product → Product, file → MediaFile…).</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Uma página do Page Designer tem três componentes, com cache de 1 dia, 1 hora e 5 minutos. Qual é o cache da página?</p>
+  <ol class="opts-l"><li>1 dia</li><li>5 minutos</li><li>1 hora</li><li>Sem cache</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Vale o menor tempo entre as instruções de cache da página e dos componentes.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Você publicou um component type novo em Production, mas o editor não o mostra. O que falta?</p>
+  <ol class="opts-l"><li>Reindexar</li><li>Uma troca de code version (as definições em Production só são recarregadas assim)</li><li>Replicar o catálogo</li><li>Limpar cookies</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Em Production, os tipos são atualizados só na troca de code version.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-dev-for-page-designer.html">Page Designer (developers)</a>: tipos, meta definitions, scripts, atributos, regions, aspects, cache, publicação.</li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/content/">Page Designer JSON Schemas</a></li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-dev-doc/docs/current/scriptapi/html/index.html?target=class_dw_experience_PageMgr.html">Script API: PageMgr</a>, RegionRenderSettings, ComponentRenderSettings.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-isslot.html">isslot</a> e <code>slotcontent</code>.</li>
+  <li>Salesforce Help: <a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_content_slots.htm&amp;type=5">Content Slots</a>, <a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_content_slot_processing.htm&amp;type=5">Content Slot Processing</a>, <a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_troubleshooting_the_slot_configuration_displayed_for_a_slot.htm&amp;type=5">Troubleshooting Slot Configuration</a>.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-content-assets-for-developers.html">Content Assets for Developers</a></li>
+  <li>Código do SFRA: <code>experience/pages/storePage.*</code>, <code>experience/components/commerce_assets/mainBanner.*</code>, <code>experience/utilities/PageRenderHelper.js</code>, <code>templates/default/slots/*</code>.</li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>

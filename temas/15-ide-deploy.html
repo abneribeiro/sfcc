@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>15 · IDE, WebDAV e deploy de código · Guia SFCC</title>
+<meta name="description" content="Montando o ambiente de desenvolvimento B2C Commerce: a extensão oficial para VS Code e alternativas, dw.json e access keys, IntelliSense da Script API, WebDAV, ciclo upload/watch, b2c CLI (substituto do sfcc-ci), code versions, script debugger e leitura de logs na IDE.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400..700&family=Inter:opsz,wght@14..32,400..700&display=swap">
+<link rel="stylesheet" href="../assets/css/ink.css">
+<script src="../assets/js/boot.js"></script>
+</head>
+<body data-page="tema" data-tema="15" data-root="..">
+<header class="topbar"></header>
+<div class="shell"><div class="layout">
+<aside class="rail" aria-label="índice"></aside>
+<main id="main" tabindex="-1">
+
+<header class="theme-h" id="topo">
+  <p class="text-label"></p>
+  <h1>IDE, WebDAV e deploy de código</h1>
+  <p class="lead">No B2C Commerce, o código é escrito localmente mas roda no servidor: cada alteração precisa chegar a uma code version da sua sandbox para ser testada. Este tema monta o ambiente de trabalho completo: a IDE e as suas extensões, as credenciais certas, o WebDAV, os modos de enviar código (sob demanda e contínuo), o CLI oficial, o debugger de scripts no servidor e a leitura de logs sem sair do editor.</p>
+  <div class="items" data-items></div>
+  <p class="theme-meta" data-meta></p>
+</header>
+
+<!-- ============================================================ -->
+<section class="chap" id="conceitos" data-k="cap. 1">
+<h2>Conceitos e glossário</h2>
+<div class="prose">
+<dl class="gloss">
+  <dt>WebDAV</dt><dd>Protocolo HTTP de arquivos que a instância expõe em <code>/on/demandware.servlet/webdav/Sites/…</code>: cartridges (code versions), logs, IMPEX, catálogos e libraries.</dd>
+  <dt>Code sync / watch</dt><dd>Envio automático de cada arquivo salvo para a code version da sandbox.</dd>
+  <dt>dw.json</dt><dd>Arquivo de conexão do projeto (host, usuário, access key, code version, client ID e secret), lido pelas ferramentas.</dd>
+  <dt>Access key</dt><dd>Credencial gerada no BM por usuário e por escopo (WebDAV File Access and UX Studio, OCAPI, storefront protegido) que substitui a senha do Account Manager em ferramentas externas. Validade de um ano.</dd>
+  <dt>Script debugger</dt><dd>Depurador de scripts que rodam no servidor (controllers, hooks, jobs, custom APIs), com breakpoints e inspeção de variáveis.</dd>
+  <dt>DAP</dt><dd>Debug Adapter Protocol: o padrão que permite a qualquer IDE compatível conversar com um depurador (o <code>b2c debug</code> implementa um adaptador).</dd>
+</dl>
+<script type="text/plain" class="mmd" data-caption="o ciclo de desenvolvimento">
+flowchart LR
+  E["Editor<br/>(VS Code + extensão B2C)"] -->|"salvar"| B["Build local<br/>(compile:js / compile:scss)"]
+  B -->|"watch / deploy<br/>(WebDAV)"| CV["Code version<br/>da sandbox"]
+  CV --> R["Request no storefront<br/>ou job"]
+  R -->|"breakpoint"| D["Script debugger"]
+  R -->|"Logger"| L["Logs (tail na IDE)"]
+  D --> E
+  L --> E
+</script>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="ides" data-k="cap. 2">
+<h2>Opções de IDE</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Ferramenta</th><th>Mantida por</th><th>O que oferece</th></tr></thead>
+<tbody>
+<tr><td><strong>Salesforce B2C Commerce IDE Extension</strong> (VS Code, Cursor e editores compatíveis)</td><td>Salesforce (oficial)</td><td>Sintaxe e snippets de ISML, IntelliSense da Script API (<code>dw/*</code>) sem configuração, resolução de <code>*/</code> e <code>~/</code>, code sync e watch, script debugger, explorer de sandboxes, browser de WebDAV, library explorer (Page Designer), export de site archives, API explorer de SCAPI, tailing de logs, scaffolding</td></tr>
+<tr><td><strong>Prophet Debugger</strong> (VS Code)</td><td>Comunidade</td><td>Upload ao salvar, debugger e suporte a ISML; muito usado historicamente</td></tr>
+<tr><td><strong>Plugins JetBrains</strong> (IntelliJ, WebStorm)</td><td>Comunidade</td><td>Integram-se à configuração do b2c CLI; debug via <code>b2c debug</code> (DAP)</td></tr>
+<tr><td><strong>UX Studio</strong> (Eclipse)</td><td>Salesforce (legado)</td><td>A IDE da era SiteGenesis e pipelines; não é usada em projetos novos</td></tr>
+</tbody>
+</table>
+<aside class="callout" data-kind="verify">
+<p>A extensão oficial é publicada como <code>Salesforce.b2c-vs-extension</code> no Visual Studio Marketplace e no Open VSX, segundo a documentação do <em>B2C Developer Tooling</em>. As ferramentas da comunidade (Prophet, plugins JetBrains) mudam de mantenedor e de recursos com o tempo; confira o estado atual antes de padronizá-las no time. Para a prova, o conceito importa: uma IDE conectada por WebDAV, que envia cartridges para uma code version e depura no servidor.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="config" data-k="cap. 3">
+<h2>Instalação e configuração</h2>
+<div class="prose">
+<ol class="steps">
+  <li>Instale a extensão (Marketplace ou Open VSX) e o Node.js (para o build do SFRA e o CLI).</li>
+  <li>No BM da sandbox, gere uma <strong>access key</strong> com escopo <em>WebDAV File Access and UX Studio</em> (<em>seu usuário &gt; Manage Access Keys</em>).</li>
+  <li>Para operações de code version e sandboxes, crie um <strong>API client</strong> no Account Manager (client ID e secret) com as permissões necessárias.</li>
+  <li>Crie o <code>dw.json</code> na raiz do projeto e adicione-o ao <code>.gitignore</code>.</li>
+  <li>Abra o projeto: a extensão detecta os cartridges (pastas com <code>.project</code> e <code>cartridge/</code>) e a instância ativa aparece na barra de status.</li>
+</ol>
+<script type="text/plain" class="src" data-lang="json" data-file="dw.json (projeto)">
+{
+    "hostname": "zzpq-001.dx.commercecloud.salesforce.com",
+    "username": "dev@acme.com",
+    "password": "ACCESS-KEY-WEBDAV-UX-STUDIO",
+    "code-version": "dev_ana",
+    "client-id": "a1b2c3d4-...-account-manager-client",
+    "client-secret": "nao-versionar",
+    "short-code": "kv7kzm78",
+    "tenant-id": "zzpq_001"
+}
+</script>
+<table>
+<thead><tr><th>Recurso da extensão</th><th>Precisa de</th></tr></thead>
+<tbody>
+<tr><td>Code sync, WebDAV browser, logs, debugger</td><td><code>hostname</code> + <code>username</code> + <code>password</code> (access key)</td></tr>
+<tr><td>Operações de code version (listar, ativar)</td><td>WebDAV <strong>e</strong> OAuth (<code>client-id</code> + <code>client-secret</code>)</td></tr>
+<tr><td>Sandbox explorer</td><td>OAuth e a role <em>Sandbox API User</em></td></tr>
+<tr><td>API explorer de SCAPI</td><td>Account Manager, <code>short-code</code> e <code>tenant-id</code> (e SLAS para shopper APIs)</td></tr>
+</tbody>
+</table>
+<h3 id="intellisense">IntelliSense da Script API em outras IDEs</h3>
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal">
+# gera .b2c-script-types/ e um jsconfig.json na raiz que mapeia dw/* para as definições TypeScript
+b2c setup ide vscode-types
+</script>
+<p>Com a extensão oficial, isso é automático e não escreve nada no repositório. Para o código <code>require('server')</code> do SFRA, a extensão também injeta tipos do módulo <code>server</code> quando encontra o cartridge <code>modules</code>.</p>
+<aside class="callout" data-kind="tip">
+<p>Use uma <strong>code version por desenvolvedor</strong> na sandbox compartilhada (ex.: <code>dev_ana</code>), ou uma sandbox por desenvolvedor. A documentação de boas práticas recomenda nomes únicos para não sobrescrever o trabalho de colegas.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="webdav" data-k="cap. 4">
+<h2>WebDAV na prática</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Pasta</th><th>Conteúdo</th></tr></thead>
+<tbody>
+<tr><td><code>/Sites/Cartridges/&lt;code-version&gt;/</code></td><td>Os cartridges de cada code version (o arquivo <code>.version</code> indica a ativa)</td></tr>
+<tr><td><code>/Sites/Logs/</code></td><td>Logs do sistema e custom; subpastas como <code>deprecation/</code> e logs de jobs</td></tr>
+<tr><td><code>/Sites/Impex/</code></td><td>Área de import/export: <code>src/</code> (entrada), arquivos gerados por exports e jobs</td></tr>
+<tr><td><code>/Sites/Catalogs/&lt;catálogo&gt;/</code>, <code>/Sites/Libraries/&lt;library&gt;/</code></td><td>Estáticos de catálogo e de conteúdo (imagens)</td></tr>
+<tr><td><code>/Sites/Dynamic/&lt;site&gt;/</code></td><td>Arquivos dinâmicos do site</td></tr>
+</tbody>
+</table>
+<p>Os caminhos de WebDAV de cada instância aparecem em <em>Administration &gt; Site Development &gt; Development Setup</em>. As permissões de escrita por pasta vêm da role do usuário (aba WebDAV Permissions). Qualquer cliente WebDAV (a extensão, Cyberduck, WinSCP) funciona com usuário e access key.</p>
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal (b2c CLI)">
+# --root escolhe a raiz: impex (padrão), cartridges, logs, catalogs, libraries, dynamic, static, temp…
+b2c webdav ls --root=logs                                  # listar os logs
+b2c webdav get customerror.log --root=logs -o ./           # baixar um arquivo de log
+b2c webdav ls --root=cartridges                            # code versions e cartridges
+b2c webdav put ./feeds/inventory.xml src/inventory/        # subir um feed para a área IMPEX (raiz padrão)
+</script>
+<aside class="callout" data-kind="note">
+<p>A plataforma limita o nome da pasta de cartridges a 50 caracteres no WebDAV e recomenda no máximo 100 mil arquivos por pasta.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="deploy" data-k="cap. 5">
+<h2>Enviando código</h2>
+<div class="prose">
+<h3 id="loop-local">No dia a dia (sandbox)</h3>
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal">
+# 1) build do que tem JS/SCSS de cliente
+npm run compile:js && npm run compile:scss
+
+# 2a) watch: envia cada arquivo salvo para a code version do dw.json
+b2c code watch
+#     equivalente nas ferramentas do SFRA (dwupload por baixo)
+npm run watch
+
+# 2b) deploy sob demanda de cartridges inteiros
+b2c code deploy -c app_custom_acme -c int_acme_reviews
+npm run uploadCartridge
+</script>
+<p>Na extensão, o code sync faz o papel do watch, e o comando de deploy envia sob demanda. Lembre de recompilar o JS e o SCSS de cliente antes: o watch envia o que está em <code>static/</code>, não o fonte de <code>client/</code>.</p>
+
+<h3 id="cli">b2c CLI × sfcc-ci</h3>
+<p>O <code>sfcc-ci</code> foi <strong>depreciado</strong>; o substituto oficial é o <code>@salesforce/b2c-cli</code>. Mapeamento dos comandos mais comuns:</p>
+<table>
+<thead><tr><th>sfcc-ci (legado)</th><th>b2c CLI</th></tr></thead>
+<tbody>
+<tr><td><code>sfcc-ci client:auth &lt;id&gt; &lt;secret&gt;</code></td><td><code>b2c auth client --client-id … --client-secret …</code> (ou variáveis <code>SFCC_CLIENT_ID</code>/<code>SFCC_CLIENT_SECRET</code>)</td></tr>
+<tr><td><code>sfcc-ci code:deploy</code></td><td><code>b2c code deploy</code> (a partir do fonte local)</td></tr>
+<tr><td><code>sfcc-ci code:activate &lt;v&gt;</code></td><td><code>b2c code activate &lt;v&gt;</code></td></tr>
+<tr><td><code>sfcc-ci code:list</code></td><td><code>b2c code list</code></td></tr>
+<tr><td><code>sfcc-ci instance:upload &lt;arquivo&gt;</code></td><td><code>b2c webdav put …</code></td></tr>
+<tr><td><code>sfcc-ci instance:import &lt;zip&gt;</code></td><td><code>b2c job import …</code> / <code>b2c content import …</code></td></tr>
+<tr><td><code>sfcc-ci sandbox:create</code></td><td><code>b2c sandbox create</code></td></tr>
+</tbody>
+</table>
+
+<h3 id="ambientes-pig">Para Staging e Production</h3>
+<ul>
+  <li><strong>Staging</strong>: upload numa <strong>code version nova</strong> (ex.: <code>rel_2026_11_04</code>), com o <strong>certificado de cliente</strong> exigido para uploads em Staging (2FA). Normalmente feito pelo pipeline de CI (<a class="text-link" href="16-node-git.html#ci">tema 16</a>).</li>
+  <li>Teste em Staging e replique para Development; depois <strong>code replication</strong> para Production (<a class="text-link" href="01-arquitetura.html#code-replication">tema 01</a>).</li>
+  <li><strong>Production</strong>: uploads bloqueados (configuração obrigatória); o código chega só por replicação.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="debugger" data-k="cap. 6">
+<h2>Script debugger</h2>
+<div class="prose">
+<p>O debugger para em qualquer código do servidor: controllers SFRA, hooks (inclusive de OCAPI/SCAPI), jobs, custom APIs, helpers.</p>
+<h3 id="debug-requisitos">Requisitos</h3>
+<ul>
+  <li>Credencial <strong>Basic</strong>: usuário do BM + access key com escopo <em>WebDAV File Access and UX Studio</em>. OAuth não serve, e a senha do Account Manager não é aceita com login unificado.</li>
+  <li>Usuário com a permissão de WebDAV de customização (<code>WebDAV_Manage_Customization</code>).</li>
+  <li>Os cartridges locais iguais aos da code version ativa (para mapear linhas).</li>
+</ul>
+<h3 id="debug-vscode">Depurando no VS Code</h3>
+<ol class="steps">
+  <li>Inicie uma sessão do <em>B2C Script Debugger</em> pela extensão.</li>
+  <li>Ponha breakpoints (ou <em>log points</em>, que registram sem parar) no arquivo do cartridge.</li>
+  <li>Dispare o código: abra a página, chame a rota por AJAX ou rode o job.</li>
+  <li>Inspecione variáveis e a pilha, avalie expressões, avance passo a passo e solte (resume).</li>
+</ol>
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal: debugger pelo CLI (REPL)">
+b2c debug cli --cartridge-path ./cartridges
+# no REPL:
+#   break Cart.js:42
+#   break Checkout.js:100 if basket.totalGrossPrice > 100
+#   breakpoints
+#   (dispare o request no navegador; quando parar: inspecione, step, continue)
+</script>
+<aside class="callout" data-kind="warn">
+<p>Breakpoints <strong>pausam requests e jobs de verdade</strong>, e avaliar expressões pode alterar estado. Depure em sandbox. Numa instância com vários application servers, o request precisa cair no mesmo app server da sessão do debugger: envie o cookie <code>dwsid</code> da sessão (a extensão tem o comando <em>Copy Debugger Session ID</em>). Sandboxes têm um único app server e não precisam disso.</p>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="logs-ide" data-k="cap. 7">
+<h2>Logs sem sair do editor</h2>
+<div class="prose">
+<script type="text/plain" class="src" data-lang="bash" data-file="terminal (b2c CLI)">
+b2c logs get                              # últimas entradas de error e customerror
+b2c logs get --since 15m --count 100      # janela de tempo
+b2c logs get --json                       # saída estruturada
+</script>
+<p>A extensão tem <strong>Start/Stop Tailing Logs</strong>, que transmite <code>error-*</code>, <code>warn-*</code>, <code>info-*</code> e os logs custom (<code>custom-*</code>) para o painel de saída. Tipos de log, categorias e Log Center estão no <a class="text-link" href="21-troubleshooting.html">tema 21</a>.</p>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="qualidade" data-k="cap. 8">
+<h2>Qualidade no editor</h2>
+<div class="prose">
+<ul>
+  <li><strong>ESLint</strong> com a configuração do SFRA (o projeto base traz <code>npm run lint</code>), que pega erros antes do upload.</li>
+  <li><strong>Stylelint</strong> para SCSS (scripts <code>lint:css</code> criados pelo <code>sgmf-scripts</code>).</li>
+  <li><strong>isml-linter</strong> (comunidade) para templates ISML: tags malformadas, <code>isset</code> sem escopo, encoding.</li>
+  <li><strong>Scaffolding</strong> da extensão: cartridges, controllers, hooks e jobs a partir de modelos.</li>
+  <li><strong>Testes unitários</strong> locais (mocha + proxyquire) rodando sem servidor (<a class="text-link" href="16-node-git.html#testes">tema 16</a>).</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="anti" data-k="armadilhas">
+<h2>Anti-padrões e pegadinhas de prova</h2>
+<div class="prose">
+<aside class="callout" data-kind="anti">
+<p><strong><code>dw.json</code> com credenciais no Git.</strong> Use <code>.gitignore</code>; no CI, variáveis de ambiente.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Vários devs na mesma code version</strong> da sandbox compartilhada: um sobrescreve o outro.</p>
+</aside>
+<aside class="callout" data-kind="anti">
+<p><strong>Editar arquivos direto pelo WebDAV</strong> no servidor (sem passar pelo Git): a mudança se perde no próximo deploy e ninguém sabe que existiu.</p>
+</aside>
+<aside class="callout" data-kind="exam">
+<ul>
+  <li>Código chega à instância via <strong>WebDAV</strong>, numa <strong>code version</strong>; precisa estar <strong>ativa</strong> para valer.</li>
+  <li>Credencial de WebDAV com login unificado: <strong>access key</strong>, não a senha do Account Manager.</li>
+  <li>Production: upload bloqueado; Staging: upload com certificado de cliente; Production recebe por replicação.</li>
+  <li>O <code>dw.json</code> define host, credenciais e code version de destino.</li>
+  <li><code>sfcc-ci</code> está depreciado; o substituto é o <code>b2c</code> CLI.</li>
+</ul>
+</aside>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="troubleshooting" data-k="debug">
+<h2>Troubleshooting</h2>
+<div class="prose">
+<table>
+<thead><tr><th>Sintoma</th><th>Causa provável</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td>401 no upload ou no debugger</td><td>Senha do Account Manager em vez de access key; escopo errado; key expirada ou bloqueada (6 erros)</td><td>Gere uma access key com o escopo certo.</td></tr>
+<tr><td>Upload ok, mas o storefront não muda</td><td>Code version do <code>dw.json</code> não é a ativa; cartridge fora do path; cache</td><td>Confira Code Deployment, cartridge path e cache.</td></tr>
+<tr><td>Breakpoint nunca para</td><td>Arquivo local diferente do servidor; request em outro app server (PIG); cartridge à direita no path (outro arquivo é executado)</td><td>Redeploy; use <code>dwsid</code>; confira qual arquivo vence no path.</td></tr>
+<tr><td>IntelliSense não reconhece <code>dw/…</code></td><td>Pasta sem <code>.project</code> + <code>cartridge/</code>; extensão desativada; outra IDE sem jsconfig</td><td>Estruture o cartridge; rode <code>b2c setup ide vscode-types</code>.</td></tr>
+<tr><td>Deploy em Staging recusado</td><td>Falta certificado de cliente (2FA)</td><td>Configure o certificado no CLI ou pipeline.</td></tr>
+<tr><td>Watch envia, mas o JS não muda</td><td>Fonte em <code>client/</code> não recompilado</td><td>Rode <code>compile:js</code> (ou um watcher de webpack).</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="checklist" data-k="revisão">
+<h2>Checklist: você precisa saber</h2>
+<div class="prose">
+<ul class="check">
+  <li>Instalar e configurar a IDE (extensão oficial ou alternativa) com <code>dw.json</code> e access key.</li>
+  <li>Explicar o WebDAV e as suas pastas (Cartridges, Logs, Impex, Catalogs, Libraries).</li>
+  <li>Enviar código com watch e deploy (b2c CLI e scripts do SFRA) e ativar code versions.</li>
+  <li>Saber as regras de upload em Staging (certificado) e Production (bloqueado).</li>
+  <li>Depurar scripts no servidor (requisitos, fluxo, cuidados).</li>
+  <li>Ler logs pela IDE ou pelo CLI.</li>
+  <li>Configurar lint e IntelliSense.</li>
+</ul>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="fixacao" data-k="prática">
+<h2>Questões de fixação</h2>
+<div class="prose">
+<ol class="drill">
+<li>
+  <p class="drill-q">Numa organização com login unificado do Account Manager, que senha a IDE usa para o WebDAV?</p>
+  <ol class="opts-l"><li>A senha do Account Manager</li><li>Uma access key gerada no BM com escopo WebDAV File Access and UX Studio</li><li>O client secret</li><li>Nenhuma</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Ferramentas externas não suportam SSO; access keys substituem a senha.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Onde o código fica no servidor depois do upload?</p>
+  <ol class="opts-l"><li>Em <code>/Sites/Impex/</code></li><li>Numa pasta de code version em <code>/Sites/Cartridges/&lt;versão&gt;/</code></li><li>No banco de dados</li><li>No eCDN</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> E só vale se essa versão for a ativa.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual é o caminho correto para levar código a Production?</p>
+  <ol class="opts-l"><li>Upload WebDAV direto na versão ativa de Production</li><li>Upload numa versão nova em Staging (com certificado), testes, e code replication para Production</li><li>Site import</li><li>OCAPI</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> Uploads em Production são bloqueados; o código chega por replicação.</p></div></details>
+</li>
+<li>
+  <p class="drill-q">Qual ferramenta substitui oficialmente o <code>sfcc-ci</code>?</p>
+  <ol class="opts-l"><li><code>sgmf-scripts</code></li><li><code>@salesforce/b2c-cli</code> (<code>b2c</code>)</li><li>UX Studio</li><li><code>dwupload</code></li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> A documentação de migração mapeia os comandos (code, sandbox, webdav, jobs).</p></div></details>
+</li>
+<li>
+  <p class="drill-q">O que o script debugger exige como credencial?</p>
+  <ol class="opts-l"><li>OAuth client credentials</li><li>Usuário do BM + access key (Basic auth)</li><li>Token SLAS</li><li>Certificado de cliente</li></ol>
+  <details class="answer"><summary class="quiet-action text-meta">ver resposta</summary><div><p><strong>b.</strong> OAuth não é suficiente, segundo o guia do Script Debugger.</p></div></details>
+</li>
+</ol>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section class="chap" id="referencias" data-k="fontes">
+<h2>Referências oficiais</h2>
+<div class="prose">
+<ul class="refs">
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-developer-tooling/vscode-extension/">B2C Commerce IDE Extension</a> e <a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-developer-tooling/vscode-extension/configuration.html">configuração</a>.</li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-developer-tooling/guide/ide-integration.html">IDE Integration</a>: IntelliSense da Script API.</li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-developer-tooling/guide/script-debugger.html">Script Debugger</a></li>
+  <li><a class="text-link" href="https://salesforcecommercecloud.github.io/b2c-developer-tooling/guide/sfcc-ci-migration.html">Migrating from sfcc-ci</a></li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-code-deployment.html">Code Deployment</a>: versões, uploads seguros.</li>
+  <li><a class="text-link" href="https://developer.salesforce.com/docs/commerce/b2c-commerce/guide/b2c-cartridges.html">Cartridges</a>: WebDAV e download.</li>
+  <li><a class="text-link" href="https://help.salesforce.com/s/articleView?id=cc.b2c_access_keys_for_business_manager.htm&amp;type=5">Access Keys</a></li>
+</ul>
+</div>
+</section>
+
+</main>
+</div></div>
+<script src="../assets/js/manifest.js"></script>
+<script src="../assets/js/core.js"></script>
+<script src="../assets/js/diagrams.js"></script>
+<script src="../assets/js/search.js"></script>
+</body>
+</html>
